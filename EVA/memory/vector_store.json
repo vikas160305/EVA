@@ -1,0 +1,22 @@
+{
+  "documents": [
+    {
+      "category": "identity",
+      "key": "language",
+      "content": "language: Telugu",
+      "metadata": {
+        "value": "Telugu",
+        "updated": "2026-10-13"
+      }
+    },
+    {
+      "category": "projects",
+      "key": "current_image_name",
+      "content": "current_image_name: alone",
+      "metadata": {
+        "value": "alone",
+        "updated": "2026-08-18"
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+config/api_keys.json
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+secrets/
+
+# Generated or OS runtime artifacts
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+*.orig
+
+# Cache folders
+.cache/
+.cache
+
+# Browser / test / local state artifacts
+playwright-report/
+coverage/
+htmlcov/
+.pytest_cache/
+
+# Local certificate and runtime material never committed
+certs/
+config/certs/

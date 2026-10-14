@@ -1,0 +1,27 @@
+{
+  "identity": {
+    "language": {
+      "value": "Telugu",
+      "updated": "2026-10-13"
+    }
+  },
+  "preferences": {},
+  "projects": {
+    "current_image_name": {
+      "value": "alone",
+      "updated": "2026-08-18"
+    }
+  },
+  "relationships": {},
+  "wishes": {},
+  "notes": {},
+  "monitors": {
+    "government_news": {
+      "topic": "government news",
+      "added": "2026-08-07",
+      "last_check": "2026-10-14",
+      "last_hash": "b1278b6528fa"
+    }
+  },
+  "sessions": []
+}
