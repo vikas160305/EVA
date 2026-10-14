@@ -1,299 +1,228 @@
-﻿# 🤖 EVA — AI Desktop Assistant
-### Powered by Gemini Live API · Real-time Voice · Full PC Control
+# EVA / Mark L
 
-> A conversational AI assistant that hears you, sees your screen, remembers your context, and controls your computer — entirely by voice.
+EVA is a local desktop AI assistant for Windows-focused personal computing. It combines a PyQt6 desktop HUD, Gemini Live voice interaction, file and browser control, proactive monitoring, and a remote dashboard for mobile access.
 
----
+The codebase is actively evolving, and the project names are used a bit interchangeably across files (`EVA`, `JARVIS`, and `Mark L`). The repository itself is organized around the EVA assistant experience, while the runtime config and environment variables use the `MARK_L_*` naming convention.
 
-## ✨ What is EVA?
+## What this project does
 
-EVA is a local, voice-first AI assistant built on top of Google''s **Gemini Live API**. It runs as a native desktop application (PyQt6 HUD) and gives you a hands-free, always-available assistant that can:
+- Voice-first assistant workflows using Gemini Live
+- Desktop control for apps, windows, mouse, keyboard, and system settings
+- Browser and file automation
+- Memory and session management
+- News, weather, web search, and AI-powered task assistance
+- Remote dashboard access for phone/mobile control
+- Background monitoring and proactive alerts
 
-- Hold natural, real-time voice conversations in **any language**
-- Control your entire PC — apps, files, browser, volume, window management
-- Remember who you are, what you''re working on, and what you discussed yesterday
-- Watch topics in the background and brief you proactively
+## Tech stack
 
-No monthly subscription. No cloud lock-in beyond the Gemini API key. Everything runs locally.
+- Python 3.11+
+- PyQt6 for the desktop interface
+- Google GenAI / Gemini Live for AI responses and native audio
+- sounddevice for microphone and speaker streaming
+- FastAPI + WebSocket dashboard server
+- Playwright, pyautogui, pygetwindow, and related automation libraries
+- Memory and document processing utilities for PDF/DOCX/PPTX workflows
 
----
+## Supported environment
 
-## 🚀 Quick Start
+- Primary target: Windows 10 / 11
+- Some features are designed to work on macOS or Linux, but Windows is the main supported platform.
+- Requires a microphone for voice interactions.
+- Requires a Google Gemini API key.
 
-### 1. Clone & Install
+## Quick start
+
+### 1. Clone the project
 
 ```bash
 git clone <your-repo-url>
 cd EVA
+```
+
+### 2. Create a virtual environment
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+### 3. Install dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure your API key
-
-Copy the environment template and fill in your Gemini key:
+If you are setting up the project for the first time, you can also run:
 
 ```bash
-cp .env.example .env
-# Edit .env and set MARK_L_GEMINI_API_KEY=<your key>
+python setup.py
 ```
 
-Or set it directly in `config/api_keys.json`:
+This installs requirements and Playwright dependencies.
 
-```json
-{
-  "gemini_api_key": "YOUR_KEY_HERE",
-  "assistant_name": "EVA",
-  "user_name": "Your Name"
-}
+### 4. Configure your API key
+
+Use the environment template:
+
+```bash
+copy .env.example .env
 ```
 
-Get a free Gemini API key at [aistudio.google.com](https://aistudio.google.com).
+Then edit `.env` and set:
 
-### 3. Run
+```env
+MARK_L_GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+You may also set the key through `config/api_keys.json` if your local setup still uses the legacy config file.
+
+### 5. Run the app
 
 ```bash
 python main.py
 ```
 
----
+## Configuration
 
-## 📋 Requirements
+The project uses environment variables with the `MARK_L_` prefix, defined in `.env.example` and read by `core/config.py`.
 
-| Requirement | Details |
-|---|---|
-| **OS** | Windows 10/11 (macOS / Linux partially supported) |
-| **Python** | 3.11 or 3.12 |
-| **Microphone** | Required for voice interaction |
-| **API Key** | Free Gemini API key |
+Common settings:
 
-### Python Dependencies
-
-```bash
-pip install -r requirements.txt
+```env
+MARK_L_GEMINI_API_KEY=your_key
+MARK_L_GEMINI_MODEL=models/gemini-2.5-flash-native-audio-preview-12-2025
+MARK_L_SEARCH_MODE=search
+MARK_L_CACHE_TTL_SECONDS=30
+MARK_L_LOG_LEVEL=INFO
+MARK_L_TIMEOUT_SECONDS=60.0
+MARK_L_ALLOW_BACKGROUND_TASKS=true
+MARK_L_ALLOW_WINDOWS_SUBPROCESS_HIDE=true
+MARK_L_SAFE_HOME=%USERPROFILE%
+MARK_L_MANIFEST_PATH=config/api_keys.json
 ```
 
-### Optional — Better Document Conversion
+Important: Do not commit real API keys or secrets to the repository. Keep local config files outside version control whenever possible.
 
-For accurate DOCX / PPTX ↔ PDF conversions, install LibreOffice and add it to your PATH:
+## Project structure
 
-- **Download:** https://www.libreoffice.org/download/download/
-
-Then install the extra Python packages:
-
-```bash
-pip install python-docx python-pptx reportlab PyPDF2 Pillow docx2pdf comtypes pywin32
-```
-
-> ⚠️ Some OS-specific packages (like `pycaw`, `pywin32`) are Windows-only and will not install on macOS/Linux — this is expected.
-
-Run `python setup_check.py` to verify your full environment.
-
----
-
-## 🎛️ Capabilities
-
-### 🎙️ Voice & Conversation
-| Feature | Description |
-|---|---|
-| Real-time Voice | Ultra-low latency via Gemini Live API |
-| Wake Word | Offline "Hey EVA" detection — Gemini only activates after the phrase |
-| Hybrid Input | Seamlessly switch between voice and keyboard |
-| Multilingual | Detects your language on first use; all sessions adapt automatically |
-
-### 🖥️ PC Control
-| Feature | Description |
-|---|---|
-| App Launcher | Open any application by name |
-| System Settings | Adjust volume, brightness, WiFi, and power by voice |
-| Computer Control | Keyboard shortcuts, mouse movement, and window management |
-| Desktop Control | Taskbar, window switching, and desktop-level operations |
-| Browser Control | Open URLs, navigate tabs, interact with web pages by voice |
-
-### 🧠 Memory & Context
-| Feature | Description |
-|---|---|
-| Persistent Memory | Remembers your projects, preferences, and personal context |
-| Session Summaries | Summarizes each conversation; briefs you next morning then clears itself |
-| Vector Memory | Semantic search over long-term memory for relevant context retrieval |
-
-### 🌐 Web & Search
-| Feature | Description |
-|---|---|
-| Multi-Mode Search | news / research / price / compare — Gemini Grounded + DDG fallback |
-| Parallel News | Runs Gemini + DuckDuckGo simultaneously; fastest result wins |
-| Flight Finder | Live flight price and availability lookup |
-| Weather Report | Live weather for your city, personalized from memory |
-
-### 📂 File & Document
-| Feature | Description |
-|---|---|
-| File Controller | Create, rename, move, copy, delete files and folders by voice |
-| File Processor | Read, summarize, and Q&A over local documents (PDF, DOCX, PPTX, TXT) |
-| Content Creator | Generate and save documents, reports, and text files |
-
-### 👁️ Vision
-| Feature | Description |
-|---|---|
-| Screen Awareness | Real-time screen capture piped into Gemini |
-| Webcam Vision | Webcam feed available for visual context |
-
-### 🔔 Proactive & Background
-| Feature | Description |
-|---|---|
-| Morning Briefing | On first boot: greets you, reads the time, recaps yesterday, fetches news |
-| Proactive 2.0 | Time/context-aware check-ins — rotates topics, 20-min cooldown |
-| Background Monitor | Watches any topic — checks for new headlines daily |
-| Smart Reminders | OS-native scheduled notifications |
-| System Monitor | Continuous CPU, RAM, GPU & temperature telemetry with voice alerts |
-
-### 🛠️ Developer & Extras
-| Feature | Description |
-|---|---|
-| Code Helper | Inline code review, debugging, and generation |
-| Dev Agent | Autonomous developer task agent |
-| YouTube Control | Search, play, and control YouTube playback by voice |
-| Send Message | Compose messages through WhatsApp, Telegram, and more |
-| Game Updater | Checks and triggers updates on Steam and Epic Games |
-| Clipboard Intelligence | Copy text → panel with Translate / Summarize / Explain / Fix |
-| Remote Dashboard | Control EVA from your phone via QR code pairing |
-| Auto-Start | Registers with OS startup (Windows Registry / LaunchAgent) |
-| Assistant Customization | Change assistant name and your name from the UI at runtime |
-
----
-
-## 🗂️ Project Structure
-
-```
+```text
 EVA/
-├── main.py                   # Core loop — Gemini Live session, audio I/O, tool dispatch
-├── ui.py                     # PyQt6 HUD — waveform, log panel, camera feed, interrupt
-├── setup.py                  # First-run installer (pip + playwright + pywin32)
-├── setup_check.py            # Environment verification script
-├── requirements.txt          # Python dependencies
-├── .env.example              # Environment variable template (copy to .env)
+├── main.py                  # App entry point and orchestration loop
+├── ui.py                    # PyQt6 desktop user interface
+├── setup.py                 # First-run setup helper
+├── setup_check.py           # Environment verification script
+├── requirements.txt         # Python dependencies
+├── .env.example             # Safe local config template
 ├── .gitignore
-│
-├── actions/                  # Skill modules — one file per capability domain
-│   ├── web_search.py         # Gemini + DDG parallel search
-│   ├── screen_processor.py   # Screen capture & webcam vision
-│   ├── background_monitor.py # Daily topic watching (no crypto)
-│   ├── proactive.py          # Proactive 2.0 engine
-│   ├── reminder.py           # OS-native scheduled notifications
-│   ├── system_monitor.py     # CPU / RAM / GPU / temperature
-│   ├── computer_settings.py  # Volume, brightness, WiFi, power
-│   ├── computer_control.py   # Keyboard shortcuts, mouse, window management
-│   ├── open_app.py           # Application launcher
-│   ├── browser_control.py    # Web browser automation
-│   ├── file_controller.py    # File system operations
-│   ├── file_processor.py     # Document reading and summarization
-│   ├── content_creator.py    # Document and text generation
-│   ├── send_message.py       # Messaging integration
-│   ├── weather_report.py     # Live weather data
-│   ├── flight_finder.py      # Flight search
-│   ├── youtube_video.py      # YouTube playback control
-│   ├── game_updater.py       # Steam / Epic game update management
-│   ├── code_helper.py        # Code review and generation
-│   ├── dev_agent.py          # Developer task agent
-│   ├── image_downloader.py   # Image download with public-URL validation
-│   ├── agent_planner.py      # High-level multi-step goal planner
-│   └── desktop.py            # Desktop and taskbar control
-│
-├── memory/                   # Persistent memory layer
-│   ├── memory_manager.py     # Load/save long_term.json
-│   ├── vector_memory.py      # Semantic search over memory entries
-│   ├── config_manager.py     # Memory configuration helpers
-│   ├── long_term.json        # Persistent store (identity, preferences, projects)
-│   └── vector_store.json     # Vector memory index
-│
-├── core/                     # Shared engine components
-│   ├── llm_client.py         # Provider routing, model selection, prompt formatting
-│   ├── tts.py                # Text-to-speech engine
-│   ├── stt.py                # Speech-to-text engine
-│   ├── intent_router.py      # Fast intent matching (pre-Gemini dispatch)
-│   ├── audio_engine.py       # Queued audio playback and microphone capture
-│   ├── latency.py            # Turn trace & latency measurement
-│   ├── safe_logging.py       # Structured, sanitized logging (no secrets)
-│   ├── safe_subprocess.py    # List-style subprocess with timeouts
-│   ├── service_boundaries.py # Service ownership definitions
-│   ├── diagnostics.py        # Repo-safe health report
-│   ├── installer.py          # Dependency installation helpers
-│   ├── config.py             # Typed, env-backed configuration layer
-│   └── prompt.txt            # Assistant personality and tool-routing rules
-│
-├── config/                   # Runtime configuration
-│   ├── api_keys.json         # API key, OS setting, assistant name, user name
-│   ├── jarvis.ico            # Application icon
-│   └── certs/                # Local TLS certs for dashboard (never commit real certs)
-│
-└── dashboard/                # Remote phone dashboard
-    ├── server.py             # FastAPI + WebSocket server
-    └── static/               # Web UI assets served to the phone
+├── actions/                 # Capability modules
+│   ├── agent_planner.py
+│   ├── background_monitor.py
+│   ├── browser_control.py
+│   ├── code_helper.py
+│   ├── computer_control.py
+│   ├── computer_settings.py
+│   ├── content_creator.py
+│   ├── desktop.py
+│   ├── dev_agent.py
+│   ├── file_controller.py
+│   ├── file_processor.py
+│   ├── flight_finder.py
+│   ├── game_updater.py
+│   ├── image_downloader.py
+│   ├── open_app.py
+│   ├── proactive.py
+│   ├── reminder.py
+│   ├── screen_processor.py
+│   ├── send_message.py
+│   ├── system_monitor.py
+│   ├── web_search.py
+│   ├── weather_report.py
+│   └── youtube_video.py
+├── config/                  # Runtime config and app assets
+│   ├── api_keys.json
+│   ├── jarvis.ico
+│   └── certs/
+├── core/                    # Core system components
+│   ├── audio_engine.py
+│   ├── config.py
+│   ├── diagnostics.py
+│   ├── installer.py
+│   ├── intent_router.py
+│   ├── latency.py
+│   ├── llm_client.py
+│   ├── prompt.txt
+│   ├── safe_logging.py
+│   ├── safe_subprocess.py
+│   ├── service_boundaries.py
+│   ├── stt.py
+│   ├── tts.py
+│   └── __init__.py
+├── dashboard/               # Remote dashboard server
+│   ├── server.py
+│   └── static/
+├── memory/                  # Local memory storage
+│   ├── config_manager.py
+│   ├── long_term.json
+│   ├── memory_manager.py
+│   ├── vector_memory.py
+│   └── vector_store.json
+├── desktop/                 # Desktop runtime assets
+├── test_*.py                # Regression and feature tests
+└── README.md
 ```
 
----
+## Key capabilities
 
-## ⚙️ Configuration
+### Voice and conversation
+- Real-time assistant conversation using Gemini Live
+- Audio capture and playback with low-latency streaming
+- Multilingual support and conversational memory context
 
-| Variable | Default | Description |
-|---|---|---|
-| `MARK_L_GEMINI_API_KEY` | — | **Required.** Your Gemini API key |
-| `MARK_L_GEMINI_MODEL` | `gemini-2.5-flash-native-audio-preview` | Model to use |
-| `MARK_L_SEARCH_MODE` | `search` | Default search mode |
-| `MARK_L_CACHE_TTL_SECONDS` | `30` | In-process search cache TTL |
-| `MARK_L_LOG_LEVEL` | `INFO` | Logging verbosity |
-| `MARK_L_TIMEOUT_SECONDS` | `60.0` | Request timeout |
-| `MARK_L_ALLOW_BACKGROUND_TASKS` | `true` | Enable proactive / monitoring |
-| `MARK_L_SAFE_HOME` | `$HOME` | Root directory for file operations |
+### Computer control
+- Launch apps
+- Control browser tabs and pages
+- Manage windows and desktops
+- Adjust brightness, volume, and system settings
+- Handle keyboard and mouse automation
 
-> ⚠️ **Never commit `.env` or real API keys.** Use `.env.example` as the template only.
+### File and document workflows
+- Read and summarize PDFs, DOCX, PPTX, and text files
+- Create documents and reports
+- Organize files and folders by voice or automation
 
----
+### Search, planning, and monitoring
+- Web search with fallback modes
+- Weather, flight, and general web queries
+- Background monitors for tracking topics and updates
+- Reminders and proactive check-ins
 
-## 🧪 Testing & Diagnostics
+### Remote dashboard
+- Local dashboard served by FastAPI for mobile or remote control
+- QR code workflow is exposed in the UI for access pairing
 
-Run the test suite:
+## Validation and diagnostics
+
+Run the project verification script:
+
+```bash
+python setup_check.py
+```
+
+Run the Python tests:
 
 ```bash
 python -m pytest -q
 ```
 
-Run a repository-safe diagnostics report (no keys or secrets printed):
+The project also includes diagnostics helpers in `core/diagnostics.py` for repository-safe health checks.
 
-```bash
-python -m core.diagnostics --report
-```
+## Notes
 
-Run the latency benchmark (no microphone or network required):
+- `main.py` deliberately hides subprocess console windows on Windows to keep the UI clean and avoid noisy terminal windows.
+- Logging is sanitized to avoid exposing API tokens, secrets, or sensitive config values.
+- The project is primarily designed for personal desktop use and is not a public SaaS deployment.
 
-```bash
-python -m core.latency --benchmark --iterations 100
-```
+## License
 
----
-
-## 🏗️ Architecture Notes
-
-- **No console windows** — `main.py` patches `subprocess.Popen` globally with `CREATE_NO_WINDOW` on Windows.
-- **Atomic file writes** — file creation uses a validated temp file then atomically replaces the target.
-- **Secret scrubbing** — all logging passes through `core.safe_logging`, which strips API keys, tokens, and certificate fields before output.
-- **Cancellation-safe queues** — audio and UI writes go through bounded, cancellation-aware queues so stale turns cannot deliver stale speech or UI updates.
-- **Retry policy** — only retries transient failures (HTTP 429, 5xx, timeout, connection reset). Never retries cancellations or invalid requests.
-
----
-
-## 🙋 Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| `ModuleNotFoundError` | `pip install <module_name>` — some OS packages are not in `requirements.txt` |
-| No audio output | Check your default audio device in system settings |
-| Wake word not triggering | Speak clearly; check microphone permissions |
-| File operations fail | Ensure `MARK_L_SAFE_HOME` points to a writable directory |
-| Dashboard QR not showing | Make sure `uvicorn` is installed and port 8000 is free |
-
----
-
-## ⚠️ License
-
-Personal and non-commercial use only.
-Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**.
+This project is intended for personal and local assistant use. Review the repository and any included licensing files before redistribution or commercial reuse.
