@@ -62,6 +62,8 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "steam":              {"Windows": "steam",                   "Darwin": "Steam",                "Linux": "steam"},
     "epic":               {"Windows": "EpicGamesLauncher",       "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
     "epic games":         {"Windows": "EpicGamesLauncher",       "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
+    "microsoft store":    {"Windows": "ms-windows-store:",       "Darwin": "App Store",            "Linux": "gnome-software"},
+    "store":              {"Windows": "ms-windows-store:",       "Darwin": "App Store",            "Linux": "gnome-software"},
 }
 
 
