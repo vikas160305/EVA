@@ -35,8 +35,12 @@ _TEXT_FORMATS = {"txt", "md", "html", "json"}
 
 
 def _api_key() -> str:
-    with open(BASE_DIR / "config" / "api_keys.json", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    try:
+        from core.llm_client import get_gemini_api_key
+        return get_gemini_api_key()
+    except Exception:
+        with open(BASE_DIR / "config" / "api_keys.json", encoding="utf-8") as f:
+            return json.load(f)["gemini_api_key"]
 
 
 def _safe_name(value: str, fallback: str = "jarvis_document") -> str:
@@ -68,7 +72,14 @@ def _research(topic: str) -> str:
 
 def _generate(prompt: str) -> str:
     from google import genai
-    client = genai.Client(api_key=_api_key())
+    try:
+        from core.llm_client import get_gemini_api_key, rotate_gemini_api_key
+        current_key = get_gemini_api_key()
+    except Exception:
+        current_key = _api_key()
+        rotate_gemini_api_key = lambda *a, **kw: current_key
+
+    client = genai.Client(api_key=current_key)
     
     candidate_models = list(CONTENT_MODELS)
     last_exc = None
@@ -82,7 +93,12 @@ def _generate(prompt: str) -> str:
             except Exception as exc:
                 last_exc = exc
                 err_msg = str(exc)
-                if "503" in err_msg or "429" in err_msg:
+                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                    current_key = rotate_gemini_api_key(current_key, reason="rate_limit")
+                    client = genai.Client(api_key=current_key)
+                    time.sleep(0.5)
+                    continue
+                if "503" in err_msg:
                     time.sleep(1.0)
                     continue
                 # For 404 or unsupported models, break to next candidate model

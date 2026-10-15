@@ -1168,12 +1168,31 @@ def get_file_info(path: str, name: str = "") -> str:
         return f"Could not get file info: {e}"
 
 
+def _find_soffice() -> str | None:
+    found = shutil.which("soffice")
+    if found:
+        return found
+    if platform.system() == "Windows":
+        candidates = [
+            Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "LibreOffice" / "program" / "soffice.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "LibreOffice" / "program" / "soffice.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "LibreOffice" / "program" / "soffice.exe",
+        ]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+    return None
+
+
 def _run_soffice_convert(src: Path, outdir: Path, to_format: str) -> Path | None:
     """Try converting using LibreOffice `soffice --convert-to`.
     Returns the output file Path on success, or None on failure.
     """
+    soffice_bin = _find_soffice()
+    if not soffice_bin:
+        return None
     try:
-        cmd = ["soffice", "--headless", "--convert-to", to_format, "--outdir", str(outdir), str(src)]
+        cmd = [soffice_bin, "--headless", "--convert-to", to_format, "--outdir", str(outdir), str(src)]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         # LibreOffice names the output with the same stem and new extension
         out = outdir / (src.stem + ("." + to_format if not to_format.startswith(".") else to_format))

@@ -17,10 +17,12 @@ Supports two backends — selected via  "llm_provider"  in config/api_keys.json:
         supports function/tool calls (e.g. Qwen2.5, Llama-3.1, Mistral).
 """
 import json
+import os
 import random
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Generator
@@ -103,6 +105,111 @@ def _load_config() -> dict:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+class ApiKeyRotator:
+    """Thread-safe API key pool manager with automatic round-robin and cooldown failover.
+
+    Supports reading keys from:
+      - config/api_keys.json: 'gemini_api_keys': [...] or 'gemini_api_key': 'key1, key2'
+      - environment: GEMINI_API_KEYS, GEMINI_API_KEY, MARK_L_GEMINI_API_KEY
+    """
+
+    def __init__(self, config_path: Path | None = None):
+        self.config_path = config_path or CONFIG_PATH
+        self._lock = threading.Lock()
+        self._keys: list[str] = []
+        self._index = 0
+        self._cooldowns: dict[str, float] = {}
+        self._reload_keys()
+
+    def _reload_keys(self) -> list[str]:
+        keys: list[str] = []
+        env_multi = os.environ.get("GEMINI_API_KEYS")
+        if env_multi:
+            for k in re.split(r"[,;\s]+", env_multi):
+                if k.strip() and k.strip() not in keys:
+                    keys.append(k.strip())
+        env_single = os.environ.get("GEMINI_API_KEY") or os.environ.get("MARK_L_GEMINI_API_KEY")
+        if env_single and env_single.strip() not in keys:
+            keys.append(env_single.strip())
+
+        try:
+            if self.config_path.exists():
+                data = json.loads(self.config_path.read_text(encoding="utf-8"))
+                multi = data.get("gemini_api_keys")
+                if isinstance(multi, list):
+                    for k in multi:
+                        if isinstance(k, str) and k.strip() and k.strip() not in keys:
+                            keys.append(k.strip())
+                single = data.get("gemini_api_key")
+                if isinstance(single, str):
+                    for k in re.split(r"[,;\s]+", single):
+                        if k.strip() and k.strip() not in keys:
+                            keys.append(k.strip())
+        except Exception:
+            pass
+
+        self._keys = keys
+        return self._keys
+
+    def get_keys(self) -> list[str]:
+        with self._lock:
+            if not self._keys:
+                self._reload_keys()
+            return list(self._keys)
+
+    def get_current_key(self) -> str:
+        with self._lock:
+            if not self._keys:
+                self._reload_keys()
+            if not self._keys:
+                raise RuntimeError("No Gemini API key configured in api_keys.json or environment.")
+            now = time.monotonic()
+            n = len(self._keys)
+            for i in range(n):
+                idx = (self._index + i) % n
+                candidate = self._keys[idx]
+                expire = self._cooldowns.get(candidate, 0.0)
+                if now >= expire:
+                    self._index = idx
+                    return candidate
+            soonest_key = min(self._keys, key=lambda k: self._cooldowns.get(k, 0.0))
+            return soonest_key
+
+    def rotate_key(self, failed_key: str | None = None, reason: str = "rate_limit", cooldown_seconds: float = 60.0) -> str:
+        with self._lock:
+            if not self._keys:
+                self._reload_keys()
+            if not self._keys:
+                raise RuntimeError("No Gemini API key available to rotate.")
+            if failed_key and failed_key in self._keys:
+                self._cooldowns[failed_key] = time.monotonic() + cooldown_seconds
+                print(f"[ApiKeyRotator] Key marked cooling down for {cooldown_seconds:.0f}s ({reason}).")
+            if len(self._keys) > 1:
+                self._index = (self._index + 1) % len(self._keys)
+                next_key = self._keys[self._index]
+                print(f"[ApiKeyRotator] Rotated to key index {self._index + 1}/{len(self._keys)}.")
+                return next_key
+            return self._keys[0]
+
+
+_API_KEY_ROTATOR = ApiKeyRotator()
+
+
+def get_gemini_api_key() -> str:
+    """Return the active, healthy Gemini API key from the rotation pool."""
+    return _API_KEY_ROTATOR.get_current_key()
+
+
+def rotate_gemini_api_key(failed_key: str | None = None, reason: str = "rate_limit", cooldown_seconds: float = 60.0) -> str:
+    """Rotate to the next API key and place the failing key in cooldown."""
+    return _API_KEY_ROTATOR.rotate_key(failed_key=failed_key, reason=reason, cooldown_seconds=cooldown_seconds)
+
+
+def get_all_gemini_api_keys() -> list[str]:
+    """Return all configured Gemini API keys."""
+    return _API_KEY_ROTATOR.get_keys()
 
 
 def ensure_ollama_running(timeout: int = 15) -> bool:

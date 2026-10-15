@@ -113,8 +113,12 @@ VAD_PREFIX_PADDING_MS = 80
 VAD_SILENCE_MS        = 450
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    try:
+        from core.llm_client import get_gemini_api_key
+        return get_gemini_api_key()
+    except Exception:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)["gemini_api_key"]
 
 
 def _load_system_prompt() -> str:
@@ -1807,15 +1811,36 @@ class JarvisLive:
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
 
-                # Invalid API key — stop hammering the API, prompt re-configuration
+                # Quota or rate limit error — auto-rotate if multiple keys configured
+                if "429" in err_str or "resource_exhausted" in err_lower or "quota" in err_lower:
+                    try:
+                        from core.llm_client import rotate_gemini_api_key, get_all_gemini_api_keys
+                        if len(get_all_gemini_api_keys()) > 1:
+                            new_key = rotate_gemini_api_key(reason="quota_exhausted")
+                            self.ui.write_log("NET: Quota reached on active key — rotated to backup key.")
+                            await asyncio.sleep(1)
+                            continue
+                    except Exception:
+                        pass
+
+                # Invalid API key — try rotation first, or prompt re-configuration
                 if "API key not valid" in err_str or "1007" in err_str:
+                    try:
+                        from core.llm_client import rotate_gemini_api_key, get_all_gemini_api_keys
+                        if len(get_all_gemini_api_keys()) > 1:
+                            new_key = rotate_gemini_api_key(reason="invalid_key")
+                            self.ui.write_log("NET: Key invalid — auto-rotated to next configured key.")
+                            await asyncio.sleep(1)
+                            continue
+                    except Exception:
+                        pass
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
                     self.ui.set_state("SLEEPING")
                     self.ui.prompt_reconfig()
                     while not self.ui._win._ready:
                         await asyncio.sleep(1)
                     print("[JARVIS] New API key saved — reconnecting...")
-                    _conn_backoff = 3
+                    self._conn_backoff = 3
                     continue
 
                 # Network / timeout errors — log clearly and back off

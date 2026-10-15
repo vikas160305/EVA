@@ -15,7 +15,10 @@ def is_tool_installed(tool_name: str, fallback_paths: list[str] | None = None) -
     return False
 
 # System tools
-checks.append(('soffice (LibreOffice)', is_tool_installed('soffice')))
+checks.append(('soffice (LibreOffice)', is_tool_installed('soffice', [
+    r"C:\Program Files\LibreOffice\program\soffice.exe",
+    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+])))
 checks.append(('tesseract (OCR)', is_tool_installed('tesseract', [
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
