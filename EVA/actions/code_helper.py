@@ -15,7 +15,7 @@ BASE_DIR           = get_base_dir()
 API_CONFIG_PATH    = BASE_DIR / "config" / "api_keys.json"
 DESKTOP            = Path.home() / "Desktop"
 MAX_BUILD_ATTEMPTS = 3
-GEMINI_MODEL       = "gemini-2.5-flash"
+GEMINI_MODEL       = "gemini-flash-latest"
 
 
 def _get_api_key() -> str:
@@ -29,7 +29,18 @@ def _get_gemini(model: str = GEMINI_MODEL):
 
     class _W:
         def generate_content(self, contents):
-            return _c.models.generate_content(model=model, contents=contents)
+            last_err = None
+            for m in [model, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+                try:
+                    return _c.models.generate_content(model=m, contents=contents)
+                except Exception as e:
+                    last_err = e
+                    if "404" in str(e) or "503" in str(e) or "429" in str(e):
+                        continue
+                    raise
+            if last_err:
+                raise last_err
+            raise RuntimeError("Gemini code generation failed.")
 
     return _W()
 
@@ -487,10 +498,19 @@ Be specific and actionable. If you see an error message, quote it exactly."""
             analysis_prompt,
         ]
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-        )
+        response = None
+        for m in [GEMINI_MODEL, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=contents,
+                )
+                if response and response.text:
+                    break
+            except Exception:
+                continue
+        if not response:
+            return "Could not analyze the screen at this moment."
 
         analysis = response.text.strip()
         print(f"[Code] ✅ Screen analysis complete")

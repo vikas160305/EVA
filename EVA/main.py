@@ -1531,12 +1531,19 @@ class JarvisLive:
         try:
             from google import genai as _genai
             client = _genai.Client(api_key=_get_api_key())
-            resp   = await asyncio.to_thread(
-                client.models.generate_content,
-                model="gemini-3.6-flash",
-                contents=prompt,
-            )
-            summary = (resp.text or "").strip()
+            resp = None
+            for _m in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+                try:
+                    resp = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=_m,
+                        contents=prompt,
+                    )
+                    if resp and resp.text:
+                        break
+                except Exception:
+                    continue
+            summary = (resp.text or "").strip() if resp else ""
             if summary:
                 save_session_summary(summary, lang)
         except Exception as e:

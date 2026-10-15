@@ -228,7 +228,7 @@ def _get_base_dir() -> Path:
 
 BASE_DIR        = _get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-GEMINI_SEARCH_MODEL = "gemini-3.6-flash"
+GEMINI_SEARCH_MODEL = "gemini-flash-latest"
 
 
 def _get_api_key() -> str:
@@ -239,29 +239,41 @@ def _get_api_key() -> str:
 def _gemini_search(query: str) -> str:
     from google import genai
 
-    client   = genai.Client(api_key=_get_api_key())
-    response = client.models.generate_content(
-        model=GEMINI_SEARCH_MODEL,
-        contents=query,
-        config={"tools": [{"google_search": {}}]},
-    )
-
-    text = ""
-    for part in response.candidates[0].content.parts:
-        if hasattr(part, "text") and part.text:
-            text += part.text
-
-    text = text.strip()
-    if not text:
-        raise ValueError("Gemini returned an empty response.")
-    return text
+    client = genai.Client(api_key=_get_api_key())
+    last_err = None
+    for model_name in [GEMINI_SEARCH_MODEL, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=query,
+                config={"tools": [{"google_search": {}}]},
+            )
+            text = ""
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, "text") and part.text:
+                        text += part.text
+            text = text.strip()
+            if text:
+                return text
+        except Exception as e:
+            last_err = e
+            if "503" in str(e) or "429" in str(e) or "404" in str(e):
+                continue
+            raise
+    if last_err:
+        raise last_err
+    raise ValueError("Gemini returned an empty response.")
 
 
 def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
     try:
         from ddgs import DDGS
     except ImportError:
-        from duckduckgo_search import DDGS
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            from duckduckgo_search import DDGS
 
     results = []
     with DDGS() as ddgs:
@@ -341,11 +353,20 @@ def _gemini_headlines(n: int = 5) -> tuple[list[str], str]:
     from google import genai
 
     client = genai.Client(api_key=_get_api_key())
-    response = client.models.generate_content(
-        model=GEMINI_SEARCH_MODEL,
-        contents=f"Current world news: {n} headlines. Numbered list, titles only.",
-        config={"tools": [{"google_search": {}}]},
-    )
+    response = None
+    for model_name in [GEMINI_SEARCH_MODEL, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=f"Current world news: {n} headlines. Numbered list, titles only.",
+                config={"tools": [{"google_search": {}}]},
+            )
+            if response and response.candidates:
+                break
+        except Exception:
+            continue
+    if not response or not response.candidates:
+        return [], ""
 
     raw = ""
     for part in response.candidates[0].content.parts:

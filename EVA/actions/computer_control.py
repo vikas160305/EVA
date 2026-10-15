@@ -335,13 +335,22 @@ def _screen_find(description: str) -> tuple[int, int] | None:
             f"If the element is not visible, reply: NOT_FOUND"
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[
-                gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                prompt,
-            ],
-        )
+        response = None
+        for _m in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+            try:
+                response = client.models.generate_content(
+                    model=_m,
+                    contents=[
+                        gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+                        prompt,
+                    ],
+                )
+                if response and response.text:
+                    break
+            except Exception:
+                continue
+        if not response or not response.text:
+            return None
 
         text = (response.text or "").strip()
         if "NOT_FOUND" in text.upper():

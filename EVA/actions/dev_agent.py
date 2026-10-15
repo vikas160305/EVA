@@ -16,21 +16,32 @@ BASE_DIR         = get_base_dir()
 API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
-MODEL_PLANNER    = "gemini-2.5-flash"
-MODEL_WRITER     = "gemini-2.5-flash"
+MODEL_PLANNER    = "gemini-flash-latest"
+MODEL_WRITER     = "gemini-flash-latest"
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
-def _get_model(model_name: str):
+def _get_model(model_name: str = MODEL_PLANNER):
     from google import genai
     _c = genai.Client(api_key=_get_api_key())
 
     class _W:
         def generate_content(self, contents):
-            return _c.models.generate_content(model=model_name, contents=contents)
+            last_err = None
+            for m in [model_name, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+                try:
+                    return _c.models.generate_content(model=m, contents=contents)
+                except Exception as e:
+                    last_err = e
+                    if "404" in str(e) or "503" in str(e) or "429" in str(e):
+                        continue
+                    raise
+            if last_err:
+                raise last_err
+            raise RuntimeError("Gemini model generation failed.")
 
     return _W()
 

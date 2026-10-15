@@ -142,7 +142,16 @@ Output ONLY the Python code. No explanation, no markdown, no backticks.
 Task: {task}"""
 
     try:
-        response = _client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = None
+        for m in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+            try:
+                response = _client.models.generate_content(model=m, contents=prompt)
+                if response and response.text:
+                    break
+            except Exception:
+                continue
+        if not response or not response.text:
+            return "ERROR: Could not generate desktop script."
         code = response.text.strip()
         if code.startswith("```"):
             lines = code.split("\n")

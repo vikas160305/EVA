@@ -64,15 +64,22 @@ def _parse_date(raw: str) -> str:
     try:
         from google import genai as _genai
         _client  = _genai.Client(api_key=_get_api_key())
-        response = _client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=(
-                f"Today is {today.strftime('%Y-%m-%d')}. "
-                f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
-                f"Return ONLY the date string, nothing else."
-            )
-        )
-        result = response.text.strip()
+        response = None
+        for _m in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+            try:
+                response = _client.models.generate_content(
+                    model=_m,
+                    contents=(
+                        f"Today is {today.strftime('%Y-%m-%d')}. "
+                        f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
+                        f"Return ONLY the date string, nothing else."
+                    )
+                )
+                if response and response.text:
+                    break
+            except Exception:
+                continue
+        result = response.text.strip() if response and response.text else ""
         if re.match(r"\d{4}-\d{2}-\d{2}", result):
             return result
     except Exception as e:
@@ -168,17 +175,26 @@ def _parse_flights_with_gemini(
     )
 
     try:
-        response = _client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are a flight data extraction expert. "
-                    "Extract flight information from raw webpage text. "
-                    "Return ONLY valid JSON — no markdown, no explanation."
+        response = None
+        for _m in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+            try:
+                response = _client.models.generate_content(
+                    model=_m,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=(
+                            "You are a flight data extraction expert. "
+                            "Extract flight information from raw webpage text. "
+                            "Return ONLY valid JSON — no markdown, no explanation."
+                        )
+                    ),
                 )
-            ),
-        )
+                if response and response.text:
+                    break
+            except Exception:
+                continue
+        if not response or not response.text:
+            return []
         text     = re.sub(r"```(?:json)?", "", response.text).strip().rstrip("`").strip()
         flights  = json.loads(text)
         return flights if isinstance(flights, list) else []

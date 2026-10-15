@@ -38,8 +38,8 @@ class DocumentService:
     signature before a safe replace or move.
     """
 
-    SUPPORTED_FORMATS = {"txt", "md", "markdown", "json", "csv", "docx", "pdf", "pptx"}
-    TEXT_EXTENSIONS = {"txt", "md", "markdown", "json", "csv"}
+    SUPPORTED_FORMATS = {"txt", "md", "markdown", "json", "csv", "docx", "pdf", "pptx", "html"}
+    TEXT_EXTENSIONS = {"txt", "md", "markdown", "json", "csv", "html"}
     OFFICE_EXTENSIONS = {"docx", "pptx", "pdf"}
     OUTPUT_LABELS = {
         "txt": "text artifact",
@@ -49,6 +49,7 @@ class DocumentService:
         "docx": "DOCX artifact",
         "pdf": "PDF artifact",
         "pptx": "PPTX artifact",
+        "html": "HTML artifact",
     }
     SUPPORTED_PAIRS = {
         "txt->txt": "high-fidelity",
@@ -204,9 +205,7 @@ class DocumentService:
         if path.stat().st_size > 50 * 1024 * 1024:
             raise ValueError("Generated artifact exceeds the safe file-size limit.")
         ext = extension.lower().lstrip(".")
-        if ext == "txt":
-            path.read_text(encoding="utf-8", errors="ignore")
-        elif ext == "md":
+        if ext in {"txt", "md", "html", "htm", "css", "py", "js", "ts", "java", "c", "cpp", "cs", "go", "rs", "php", "sql", "ps1", "sh", "bat", "xml", "yaml", "yml"}:
             path.read_text(encoding="utf-8", errors="ignore")
         elif ext == "json":
             json.loads(path.read_text(encoding="utf-8"))
@@ -230,7 +229,10 @@ class DocumentService:
             if head != b'%PDF-':
                 raise ValueError('PDF signature missing.')
         else:
-            raise ValueError(f"Unsupported output extension: {ext}")
+            try:
+                path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                raise ValueError(f"Unsupported output extension: {ext}")
 
     def _atomic_tmp_path(self, destination: Path) -> Path:
         tmp_dir = destination.parent

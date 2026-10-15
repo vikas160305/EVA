@@ -16,7 +16,14 @@ from actions.file_controller import DocumentService
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = Path.home() / "Documents" / "JARVIS Created"
-CONTENT_MODEL = "gemini-3.6-flash"
+CONTENT_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.8-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+]
+CONTENT_MODEL = CONTENT_MODELS[0]
 
 _CODE_EXTENSIONS = {
     "python": ".py", "javascript": ".js", "typescript": ".ts",
@@ -62,8 +69,27 @@ def _research(topic: str) -> str:
 def _generate(prompt: str) -> str:
     from google import genai
     client = genai.Client(api_key=_api_key())
-    response = client.models.generate_content(model=CONTENT_MODEL, contents=prompt)
-    return (response.text or "").strip()
+    
+    candidate_models = list(CONTENT_MODELS)
+    last_exc = None
+    for model_name in candidate_models:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(model=model_name, contents=prompt)
+                text = (response.text or "").strip()
+                if text:
+                    return text
+            except Exception as exc:
+                last_exc = exc
+                err_msg = str(exc)
+                if "503" in err_msg or "429" in err_msg:
+                    time.sleep(1.0)
+                    continue
+                # For 404 or unsupported models, break to next candidate model
+                break
+    if last_exc:
+        raise last_exc
+    return ""
 
 
 def _json_plan(request: str, format_name: str, research: str, count: int) -> dict:

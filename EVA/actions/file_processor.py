@@ -37,7 +37,18 @@ def _gemini_client():
 
     class _W:
         def generate_content(self, contents):
-            return _c.models.generate_content(model="gemini-2.5-flash", contents=contents)
+            last_err = None
+            for model_name in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.5-flash"]:
+                try:
+                    return _c.models.generate_content(model=model_name, contents=contents)
+                except Exception as e:
+                    last_err = e
+                    if "404" in str(e) or "503" in str(e) or "429" in str(e):
+                        continue
+                    raise
+            if last_err:
+                raise last_err
+            raise RuntimeError("Gemini model generation failed.")
 
     return _W()
 

@@ -782,7 +782,16 @@ Rules:
 - Return ONLY the JSON, no explanation, no markdown."""
 
     try:
-        resp = _client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
+        resp = None
+        for _m in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
+            try:
+                resp = _client.models.generate_content(model=_m, contents=prompt)
+                if resp and resp.text:
+                    break
+            except Exception:
+                continue
+        if not resp or not resp.text:
+            return {"action": description.lower().replace(" ", "_"), "value": None}
         text = re.sub(r"```(?:json)?", "", resp.text).strip().rstrip("`").strip()
         return json.loads(text)
     except Exception as e:
