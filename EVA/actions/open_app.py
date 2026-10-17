@@ -1,3 +1,5 @@
+import os
+import re
 import time
 import subprocess
 import platform
@@ -73,7 +75,16 @@ def _normalize(raw: str) -> str:
     if key in _APP_ALIASES:
         return _APP_ALIASES[key].get(_SYSTEM, raw)
 
+    # Windows Store search handling (e.g. "microsoft store whatsapp", "store for vlc")
+    if _SYSTEM == "Windows" and any(st in key for st in ("microsoft store", "windows store", "ms store", "store")):
+        sub = re.sub(r"\b(?:open|search|in|for|on|the|microsoft|windows|ms)?\s*store\b", " ", key)
+        sub = re.sub(r"\s+", " ", sub).strip()
+        if sub and len(sub) > 1:
+            return f"ms-windows-store://search/?query={sub}"
+
     for alias_key, os_map in _APP_ALIASES.items():
+        if alias_key == "store":
+            continue  # Avoid loose substring matching for generic "store"
         if alias_key in key or key in alias_key:
             return os_map.get(_SYSTEM, raw)
 
@@ -96,11 +107,14 @@ def _launch_windows(app_name: str) -> bool:
 
     if ":" in app_name:
         try:
-            subprocess.Popen(f"start {app_name}", shell=True)
+            if hasattr(os, "startfile"):
+                os.startfile(app_name)
+            else:
+                subprocess.Popen(f'start "" "{app_name}"', shell=True)
             time.sleep(1.0)
             return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[open_app] URI launch failed: {e}")
 
     try:
         import pyautogui
@@ -250,12 +264,25 @@ def open_app(
     if not app_name:
         return "No application name provided."
 
+    # If the user requested to download or install an app, delegate to install_app
+    lower = app_name.lower()
+    if (
+        any(lower.startswith(v) for v in ("download ", "install ", "get ", "fetch ", "setup "))
+        or (" from " in lower and any(st in lower for st in ("store", "msstore", "microsoft store")))
+        or (any(st in lower for st in ("microsoft store", "windows store")) and any(w in lower for w in ("install", "download", "get")))
+    ):
+        try:
+            from actions.install_app import install_app
+            return install_app(parameters=parameters, player=player)
+        except Exception as e:
+            print(f"[open_app] Redirection to install_app failed: {e}")
+
     launcher = _OS_LAUNCHERS.get(_SYSTEM)
     if launcher is None:
         return f"Unsupported operating system: {_SYSTEM}"
 
     normalized = _normalize(app_name)
-    print(f"[open_app] Launching: '{app_name}' → '{normalized}' ({_SYSTEM})")
+    print(f"[open_app] Launching: '{app_name}' -> '{normalized}' ({_SYSTEM})")
 
     if player:
         player.write_log(f"[open_app] {app_name}")
@@ -268,7 +295,7 @@ def open_app(
                 return f"Opened {app_name}."
         return (
             f"Could not confirm that {app_name} launched. "
-            f"It may still be loading, or it might not be installed."
+            f"It may not be installed. You can say 'install {app_name}' to download it."
         )
     except Exception as e:
         print(f"[open_app] Error: {e}")

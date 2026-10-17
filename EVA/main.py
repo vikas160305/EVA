@@ -48,6 +48,7 @@ from actions.file_processor import file_processor
 from actions.content_creator import content_creator
 from actions.flight_finder     import flight_finder
 from actions.open_app          import open_app
+from actions.install_app       import install_app
 from actions.weather_report    import weather_action
 from actions.send_message      import send_message
 from actions.reminder          import reminder
@@ -172,6 +173,29 @@ TOOL_DECLARATIONS = [
                 "app_name": {
                     "type": "STRING",
                     "description": "Exact name of the application (e.g. 'WhatsApp', 'Chrome', 'Spotify')"
+                }
+            },
+            "required": ["app_name"]
+        }
+    },
+    {
+        "name": "install_app",
+        "description": (
+            "Downloads and installs applications from the Microsoft Store or Windows Package Manager (winget). "
+            "Use this whenever the user asks to download, install, or get any app, program, or tool from Microsoft Store "
+            "or the computer (e.g. 'install WhatsApp from Microsoft Store', 'download VLC', 'get Spotify from store'). "
+            "Never just open the store homepage when asked to install or download an app — call this tool."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "app_name": {
+                    "type": "STRING",
+                    "description": "Name of the application to download/install (e.g. 'WhatsApp', 'VLC', 'Spotify', 'PowerToys')"
+                },
+                "source": {
+                    "type": "STRING",
+                    "description": "msstore | winget | auto (default: msstore)"
                 }
             },
             "required": ["app_name"]
@@ -941,6 +965,10 @@ class JarvisLive:
             if name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
+
+            elif name == "install_app":
+                r = await loop.run_in_executor(None, lambda: install_app(parameters=args, player=self.ui, speak=self.speak))
+                result = r or f"Installed {args.get('app_name')}."
 
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
