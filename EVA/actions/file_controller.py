@@ -438,6 +438,9 @@ def _get_desktop() -> Path:
         xdg = os.environ.get("XDG_DESKTOP_DIR", "")
         if xdg and Path(xdg).exists():
             return Path(xdg)
+    onedrive_dt = Path.home() / "OneDrive" / "Desktop"
+    if onedrive_dt.exists():
+        return onedrive_dt
     return Path.home() / "Desktop"
 
 def _get_downloads() -> Path:
@@ -452,6 +455,12 @@ def _get_documents() -> Path:
         xdg = os.environ.get("XDG_DOCUMENTS_DIR", "")
         if xdg and Path(xdg).exists():
             return Path(xdg)
+    jarvis_docs = Path.home() / "Documents" / "JARVIS Created"
+    if jarvis_docs.exists():
+        return Path.home() / "Documents"
+    onedrive_docs = Path.home() / "OneDrive" / "Documents"
+    if onedrive_docs.exists():
+        return onedrive_docs
     return Path.home() / "Documents"
 
 def _get_pictures() -> Path:
@@ -620,7 +629,7 @@ def _search_items(name: str, extension: str, path: str, item_type: str, max_resu
 
     for root in roots:
         def on_walk_error(error):
-            print(f"[file-search] Skipped inaccessible path: {error.filename or error}")
+            pass
 
         for current, directories, files in os.walk(root, topdown=True, onerror=on_walk_error):
             directories[:] = [
@@ -826,6 +835,99 @@ def create_folder(path: str, name: str = "") -> str:
         return f"Could not create folder: {e}"
 
 
+def _find_latest_file(category: str = "") -> Path | None:
+    search_dirs = [
+        Path.home() / "Documents" / "JARVIS Created",
+        _get_desktop(),
+        _get_documents(),
+        _get_downloads(),
+        Path.cwd(),
+    ]
+    all_files = []
+    cat_lower = (category or "").lower()
+    for d in search_dirs:
+        try:
+            if d.exists() and d.is_dir():
+                for f in d.iterdir():
+                    if f.is_file():
+                        if any(w in cat_lower for w in ("presentation", "slide", "ppt")):
+                            if f.suffix.lower() in {".ppt", ".pptx"}:
+                                all_files.append(f)
+                        elif any(w in cat_lower for w in ("document", "word", "doc")):
+                            if f.suffix.lower() in {".doc", ".docx"}:
+                                all_files.append(f)
+                        elif "pdf" in cat_lower:
+                            if f.suffix.lower() == ".pdf":
+                                all_files.append(f)
+                        elif any(w in cat_lower for w in ("code", "script", "program")):
+                            if f.suffix.lower() in {".py", ".js", ".ts", ".html", ".css", ".java", ".cpp", ".c", ".cs"}:
+                                all_files.append(f)
+                        else:
+                            all_files.append(f)
+        except Exception:
+            continue
+    if not all_files:
+        return None
+    try:
+        return max(all_files, key=lambda f: f.stat().st_mtime)
+    except Exception:
+        return None
+
+
+def _quick_find_file(name: str, path_hint: str = "") -> Path | None:
+    if not name:
+        return None
+    name_clean = name.strip()
+    name_lower = name_clean.lower()
+
+    priority_folders = [
+        Path.home() / "Documents" / "JARVIS Created",
+        _get_desktop(),
+        _get_documents(),
+        _get_downloads(),
+        Path.cwd(),
+        Path.home(),
+    ]
+
+    if path_hint and path_hint.lower() not in {"all", "everywhere", "this pc", ""}:
+        try:
+            hint_dir = _resolve_path(path_hint)
+            if hint_dir.exists() and hint_dir.is_dir() and hint_dir not in priority_folders:
+                priority_folders.insert(0, hint_dir)
+        except Exception:
+            pass
+
+    # 1. Direct exact filename match
+    for folder in priority_folders:
+        try:
+            if not folder.exists() or not folder.is_dir():
+                continue
+            direct = folder / name_clean
+            if direct.exists() and direct.is_file():
+                return direct
+        except Exception:
+            continue
+
+    # 2. Case-insensitive or stem match
+    for folder in priority_folders:
+        try:
+            if not folder.exists() or not folder.is_dir():
+                continue
+            for f in folder.iterdir():
+                try:
+                    if f.is_file():
+                        if f.name.lower() == name_lower or f.stem.lower() == name_lower:
+                            return f
+                        if name_lower in f.stem.lower() and len(name_lower) >= 4:
+                            return f
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    return None
+
+
 def _open_target(target: Path) -> str:
     """Open an existing path. Callers are responsible for access checks."""
     if not target.exists():
@@ -839,7 +941,10 @@ def _open_target(target: Path) -> str:
             try:
                 os.startfile(str(target))
             except Exception:
-                subprocess.Popen(["explorer", "/select,", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    subprocess.Popen(f'explorer /select,"{target}"', shell=True)
+                except Exception:
+                    subprocess.Popen(["explorer", str(target.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif _OS == "Darwin":
         subprocess.Popen(["open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
@@ -1524,42 +1629,68 @@ def file_controller(
             )
 
         elif action in ("open", "open_file", "open_folder", "open_path", "explore"):
+            # 1. Normalize parameters if path was passed as the filename
+            if not name and path:
+                path_str = str(path).strip()
+                p_obj = Path(path_str)
+                path_lower = path_str.lower()
+                if p_obj.is_absolute():
+                    if p_obj.exists():
+                        return open_discovered_path(p_obj.resolve(strict=False))
+                    name = p_obj.name
+                    path = "all"
+                elif p_obj.suffix or path_lower not in {"desktop", "downloads", "documents", "pictures", "images", "videos", "music", "home", "all", "user", "this pc", ""}:
+                    name = path_str
+                    path = "all"
+
+            name_clean = (name or "").strip()
+            name_lower = name_clean.lower()
+
+            # 2. Handle requests for "latest", "recent", "the file", "the document", "the presentation", etc.
+            if name_lower in {"latest", "recent", "last", "new", "the file", "the document", "the presentation", "the code", "current"}:
+                latest_hit = _find_latest_file(name_lower)
+                if latest_hit:
+                    return open_discovered_path(latest_hit)
+
+            # 3. Check pending search selection (e.g. user selected "1" or "2")
             selected = _select_pending_result(name)
             if selected:
                 return open_discovered_path(selected)
 
-            # An explicitly supplied absolute path is user-authorized for the
-            # read-only open operation, including paths on another drive.
-            if not name:
-                explicit_path = Path(path).expanduser()
-                if explicit_path.is_absolute():
-                    return open_discovered_path(explicit_path.resolve(strict=False))
+            # 4. Check priority user folders (JARVIS Created, Desktop, Documents, Downloads, CWD)
+            quick_hit = _quick_find_file(name_clean, path_hint=str(path or ""))
+            if quick_hit:
+                return open_discovered_path(quick_hit)
 
-            # A voice command normally contains only a file name, not a path.
-            # Search all user folders first, rather than failing because the
-            # default desktop path does not contain the requested item.
-            if name and path.strip().lower() in {"", "desktop", "home", "all"}:
-                item_type = "folder" if action in ("open_folder", "explore") else "file"
-                result_text = find_files(
-                    name=name,
-                    extension=params.get("extension", ""),
-                    path="all",
-                    max_results=min(int(params.get("max_results", 20)), 50),
-                    item_type=item_type,
+            # 5. Check if direct resolve_safe_path hits a valid path
+            try:
+                target = resolve_safe_path(path, name)
+                if target.exists():
+                    return open_discovered_path(target)
+            except Exception:
+                pass
+
+            # 6. Deep search across local drives
+            item_type = "folder" if action in ("open_folder", "explore") else "file"
+            result_text = find_files(
+                name=name,
+                extension=params.get("extension", ""),
+                path=path if path in {"all", "home", "desktop", "downloads", "documents"} else "all",
+                max_results=min(int(params.get("max_results", 20)), 50),
+                item_type=item_type,
+            )
+            with _SEARCH_SELECTION_LOCK:
+                selected_results = list(_LAST_SEARCH_RESULTS)
+            if len(selected_results) == 1:
+                found = selected_results[0]
+                return open_discovered_path(found)
+            if len(selected_results) > 1:
+                return (
+                    result_text
+                    + "\nWhich one should I open? Reply with a number, the full path, "
+                    "or a unique folder/file name."
                 )
-                with _SEARCH_SELECTION_LOCK:
-                    selected_results = list(_LAST_SEARCH_RESULTS)
-                if len(selected_results) == 1:
-                    found = selected_results[0]
-                    return open_discovered_path(found)
-                if len(selected_results) > 1:
-                    return (
-                        result_text
-                        + "\nWhich one should I open? Reply with a number, the full path, "
-                        "or a unique folder/file name."
-                    )
-                return result_text
-            return open_path(path, name=name)
+            return result_text or f"Could not find or open: {name or path}"
 
         elif action == "find":
             do_open = bool(params.get("open", False))
