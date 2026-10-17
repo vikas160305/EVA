@@ -89,10 +89,18 @@ def _bing_images(query: str) -> list[str]:
     response = _request(f"https://www.bing.com/images/search?q={quote_plus(query)}")
     soup = BeautifulSoup(response.text, "html.parser")
     urls = []
+    keywords = [w.lower() for w in re.findall(r"\w+", query) if len(w) >= 3]
     for node in soup.select("a.iusc"):
         try:
             metadata = json.loads(html.unescape(node.get("m", "{}")))
-            urls.append(metadata.get("murl", ""))
+            murl = metadata.get("murl", "")
+            title = metadata.get("t", "").lower()
+            desc = metadata.get("desc", "").lower()
+            # Filter out Bing featured carousel ads that do not match the search query
+            if keywords and not any(kw in title or kw in desc or kw in murl.lower() for kw in keywords):
+                continue
+            if murl:
+                urls.append(murl)
         except (json.JSONDecodeError, TypeError):
             continue
     return _unique_urls(urls)
@@ -125,13 +133,13 @@ def _webpage_images(url: str) -> list[str]:
 
 def _search_candidates(query: str, source: str, url: str | None) -> tuple[list[str], str]:
     source = (source or "auto").lower().strip()
-    providers = {"google": _google_images, "bing": _bing_images, "duckduckgo": _duckduckgo_images}
-    if source == "webpage" or (source == "auto" and url):
-        order = ["webpage", "google", "bing", "duckduckgo"]
+    providers = {"duckduckgo": _duckduckgo_images, "google": _google_images, "bing": _bing_images}
+    if source == "webpage" or (source == "webpage" and url):
+        order = ["webpage", "duckduckgo", "google", "bing"]
     elif source in providers:
         order = [source] + [name for name in providers if name != source]
     else:
-        order = ["google", "bing", "duckduckgo"]
+        order = ["duckduckgo", "google", "bing"]
     errors = []
     for provider in order:
         try:

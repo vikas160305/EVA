@@ -134,11 +134,11 @@ def _clean_query(raw: str) -> str:
     text = raw.strip()
 
     # Iteratively strip known prefixes and suffixes until stable
-    for _ in range(3):
+    for _ in range(4):
         prev = text
-        # Strip leading intent verbs and category keywords (e.g. "download song", "get images of")
+        # Strip leading command + category words (e.g. "download the image of", "download a picture of")
         text = re.sub(
-            r"^(?:download|save|fetch|get|grab)\s+(?:an?\s+)?(?:images?|songs?|videos?|files?|photos?|pictures?|music|audio|documents?|pdfs?)?\s*(?:of|for)?\s*",
+            r"^(?:download|save|fetch|get|grab)\s+(?:an?\s+|the\s+)?(?:images?|songs?|videos?|files?|photos?|pictures?|music|audio|documents?|pdfs?)?\s*(?:of|for)?\s*(?:an?\s+|the\s+)?",
             "", text, flags=re.IGNORECASE
         )
         # Strip trailing destination phrases (e.g. "and save it in file explorer", "in file explorer", "and open in folder")
@@ -156,6 +156,8 @@ def _clean_query(raw: str) -> str:
             r"\s+(?:songs?|music|audio|mp3|tracks?|images?|videos?|photos?|pictures?|wallpapers?)$",
             "", text, flags=re.IGNORECASE
         )
+        # Strip leading articles
+        text = re.sub(r"^(?:an?\s+|the\s+)", "", text, flags=re.IGNORECASE)
         text = text.strip("\"' ")
         if text == prev:
             break
@@ -422,16 +424,20 @@ def media_downloader(
     except (TypeError, ValueError):
         count = 3
 
-    # Check for active Chrome tab if source='chrome' or requested
-    if (source_pref == "chrome" or "from chrome" in raw_query.lower()) and not url_param:
+    # Check for active Chrome tab only if user asks for current page/tab or provided no query
+    wants_current_tab = any(p in raw_query.lower() for p in ("this page", "this tab", "current tab", "current page", "from the tab", "this site", "from here"))
+    if not url_param and (wants_current_tab or (not raw_query and source_pref == "chrome")):
         active_url = _get_active_browser_url()
         if active_url:
             url_param = active_url
 
-    if not raw_query and not url_param:
+    clean_target = _clean_query(raw_query) if raw_query else (url_param or "")
+    if not clean_target and url_param:
+        clean_target = url_param
+
+    if not clean_target:
         return "Please specify what you would like to download (e.g. song name, image description, or file URL)."
 
-    clean_target = url_param or _clean_query(raw_query)
     category = _detect_category(raw_query or clean_target, category_param)
     dest_folder = _get_media_dir(category)
 
