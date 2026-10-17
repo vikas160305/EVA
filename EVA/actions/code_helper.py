@@ -1,3 +1,6 @@
+import os
+import shutil
+import platform
 import subprocess
 import sys
 import json
@@ -11,11 +14,131 @@ def get_base_dir():
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
+
+def _get_desktop_dir() -> Path:
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        onedrive_desktop = Path(userprofile) / "OneDrive" / "Desktop"
+        if onedrive_desktop.is_dir():
+            return onedrive_desktop
+    standard_desktop = Path.home() / "Desktop"
+    if standard_desktop.is_dir():
+        return standard_desktop
+    return Path.home()
+
+
 BASE_DIR           = get_base_dir()
 API_CONFIG_PATH    = BASE_DIR / "config" / "api_keys.json"
-DESKTOP            = Path.home() / "Desktop"
+DESKTOP            = _get_desktop_dir()
 MAX_BUILD_ATTEMPTS = 3
 GEMINI_MODEL       = "gemini-flash-latest"
+
+
+def _open_vscode(target_path: Path) -> bool:
+    """Open a file or directory in Visual Studio Code."""
+    candidates = [
+        "code",
+        "code.cmd",
+        rf"C:\Users\{Path.home().name}\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd",
+        rf"C:\Users\{Path.home().name}\AppData\Local\Programs\Microsoft VS Code\Code.exe",
+        r"C:\Program Files\Microsoft VS Code\bin\code.cmd",
+        r"C:\Program Files\Microsoft VS Code\Code.exe",
+        r"C:\Program Files (x86)\Microsoft VS Code\bin\code.cmd",
+        r"C:\Program Files (x86)\Microsoft VS Code\Code.exe",
+    ]
+    for cmd in candidates:
+        exe = shutil.which(cmd) if not Path(cmd).is_absolute() else (cmd if Path(cmd).exists() else None)
+        if exe:
+            try:
+                subprocess.Popen(
+                    [exe, str(target_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    shell=True if platform.system() == "Windows" else False,
+                )
+                print(f"[Code] 💻 Opened in VS Code: {target_path}")
+                return True
+            except Exception as e:
+                print(f"[Code] VS Code launch error with {exe}: {e}")
+                continue
+    return False
+
+
+def _wants_vscode(description: str, params: dict = None) -> bool:
+    if (params or {}).get("open_vscode") is True or (params or {}).get("open_in_editor") is True:
+        return True
+    text = f"{description} {(params or {}).get('action', '')}".lower()
+    return any(term in text for term in ("vscode", "vs code", "vls code", "visual studio code", "in code", "in editor", "editor"))
+
+
+def _infer_slug_from_description(description: str, fallback: str = "main") -> str:
+    if not description:
+        return fallback
+    desc = description.lower()
+    keywords = [
+        "factorial", "fibonacci", "calculator", "palindrome", "prime",
+        "sorting", "bubblesort", "mergesort", "quicksort", "binarysearch",
+        "todolist", "todo", "snake", "tictactoe", "weather", "scraper",
+        "server", "client", "bot", "game", "matrix", "linkedlist", "stack", "queue"
+    ]
+    for kw in keywords:
+        if kw in desc:
+            return kw
+    words = re.findall(r"[a-zA-Z0-9]+", desc)
+    stop_words = {
+        "create", "file", "in", "language", "of", "code", "and", "run", "it",
+        "vs", "vscode", "vls", "the", "a", "an", "program", "script", "to", "write", "make"
+    }
+    meaningful = [w for w in words if w.lower() not in stop_words]
+    if meaningful:
+        return "_".join(meaningful[:2]).lower()
+    return fallback
+
+
+def _resolve_save_path(output_path: str, language: str, code: str = "", description: str = "") -> Path:
+    ext_map = {
+        "python": ".py", "py": ".py",
+        "javascript": ".js", "js": ".js", "node": ".js",
+        "typescript": ".ts", "ts": ".ts",
+        "html": ".html", "css": ".css",
+        "java": ".java",
+        "cpp": ".cpp", "c++": ".cpp", "cplusplus": ".cpp",
+        "c": ".c",
+        "csharp": ".cs", "cs": ".cs", "c#": ".cs",
+        "bash": ".sh", "shell": ".sh", "sh": ".sh",
+        "powershell": ".ps1", "ps1": ".ps1",
+        "sql": ".sql", "json": ".json",
+        "rust": ".rs", "rs": ".rs",
+        "go": ".go", "golang": ".go",
+        "ruby": ".rb", "rb": ".rb",
+        "php": ".php",
+    }
+    lang_clean = (language or "python").lower().strip()
+    ext = ext_map.get(lang_clean, ".py")
+    desktop = _get_desktop_dir()
+
+    if output_path:
+        p = Path(output_path)
+        if not p.is_absolute():
+            p = desktop / p
+        if not p.suffix:
+            p = p.with_suffix(ext)
+        return p
+
+    # For Java: class name must match file name!
+    if ext == ".java":
+        if code:
+            class_match = re.search(r"public\s+class\s+([A-Za-z0-9_]+)", code)
+            if not class_match:
+                class_match = re.search(r"class\s+([A-Za-z0-9_]+)", code)
+            if class_match:
+                return desktop / f"{class_match.group(1)}.java"
+        slug = _infer_slug_from_description(description, fallback="Factorial" if "factorial" in description.lower() else "Main")
+        return desktop / f"{slug.capitalize()}.java"
+
+    # For other languages:
+    slug = _infer_slug_from_description(description, fallback="main")
+    return desktop / f"{slug}{ext}"
 
 
 def _get_api_key() -> str:
@@ -52,21 +175,6 @@ def _clean_code(text: str) -> str:
     return text.strip()
 
 
-def _resolve_save_path(output_path: str, language: str) -> Path:
-    ext_map = {
-        "python": ".py", "py": ".py",
-        "javascript": ".js", "js": ".js",
-        "typescript": ".ts", "ts": ".ts",
-        "html": ".html", "css": ".css",
-        "java": ".java", "cpp": ".cpp", "c": ".c",
-        "bash": ".sh", "shell": ".sh", "powershell": ".ps1",
-        "sql": ".sql", "json": ".json", "rust": ".rs", "go": ".go",
-    }
-    if output_path:
-        p = Path(output_path)
-        return p if p.is_absolute() else DESKTOP / p
-    ext = ext_map.get((language or "python").lower(), ".py")
-    return DESKTOP / f"jarvis_code{ext}"
 
 
 def _read_file(file_path: str) -> tuple[str, str]:
@@ -189,7 +297,7 @@ Code:"""
 
     response = model.generate_content(prompt)
     code     = _clean_code(response.text)
-    path     = _resolve_save_path(output_path, lang)
+    path     = _resolve_save_path(output_path, lang, code=code, description=description)
     _save_file(path, code)
     return code, path
 
@@ -214,26 +322,13 @@ Fixed code:"""
     return _clean_code(response.text)
 
 
-def _run_file(path: Path, args: list, timeout: int) -> str:
-    interpreters = {
-        ".py":  [sys.executable],
-        ".js":  ["node"],
-        ".ts":  ["ts-node"],
-        ".sh":  ["bash"],
-        ".ps1": ["powershell", "-File"],
-        ".rb":  ["ruby"],
-        ".php": ["php"],
-    }
-    interp = interpreters.get(path.suffix.lower())
-    if not interp:
-        return f"No interpreter for {path.suffix}."
-
+def _exec_cmd(cmd: list, cwd: Path, timeout: int) -> str:
     try:
         result = subprocess.run(
-            interp + [str(path)] + (args or []),
+            cmd,
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            timeout=timeout, cwd=str(path.parent)
+            timeout=timeout, cwd=str(cwd)
         )
         output = result.stdout.strip()
         error  = result.stderr.strip()
@@ -241,16 +336,150 @@ def _run_file(path: Path, args: list, timeout: int) -> str:
         if output: parts.append(f"Output:\n{output}")
         if error:  parts.append(f"Stderr:\n{error}")
         return "\n\n".join(parts) if parts else "Executed with no output."
-
     except subprocess.TimeoutExpired:
         return f"Timed out after {timeout}s."
     except FileNotFoundError:
-        return f"Interpreter not found: {interp[0]}."
+        return f"Executable not found: {cmd[0]}."
     except Exception as e:
         return f"Execution error: {e}"
 
 
-def _build(description, language, output_path, args, timeout, speak=None, player=None) -> str:
+def _run_file(path: Path, args: list = None, timeout: int = 30) -> str:
+    ext = path.suffix.lower()
+    args = args or []
+
+    # Python (.py)
+    if ext == ".py":
+        return _exec_cmd([sys.executable, str(path)] + args, path.parent, timeout)
+
+    # JavaScript (.js)
+    elif ext == ".js":
+        node_bin = shutil.which("node") or shutil.which("nodejs")
+        if not node_bin:
+            return "Node.js is not installed in system PATH. Cannot execute JavaScript directly in terminal."
+        return _exec_cmd([node_bin, str(path)] + args, path.parent, timeout)
+
+    # TypeScript (.ts)
+    elif ext == ".ts":
+        runner = shutil.which("ts-node") or shutil.which("tsx")
+        if runner:
+            return _exec_cmd([runner, str(path)] + args, path.parent, timeout)
+        if shutil.which("npx"):
+            return _exec_cmd(["npx", "ts-node", str(path)] + args, path.parent, timeout)
+        return "TypeScript runner (ts-node) is not installed in system PATH. Cannot execute TypeScript directly."
+
+    # Java (.java)
+    elif ext == ".java":
+        java_bin = shutil.which("java")
+        javac_bin = shutil.which("javac")
+        if not java_bin and not javac_bin:
+            return "Java runtime (JDK) is not installed in system PATH. Cannot execute Java in terminal. Please run it inside VS Code."
+        # In Java 11+, java file.java runs single-file source code directly!
+        if java_bin:
+            try:
+                res = subprocess.run(
+                    [java_bin, str(path)] + args,
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                    timeout=timeout, cwd=str(path.parent)
+                )
+                if res.returncode == 0 or res.stdout:
+                    output = res.stdout.strip()
+                    error  = res.stderr.strip()
+                    parts  = []
+                    if output: parts.append(f"Output:\n{output}")
+                    if error:  parts.append(f"Stderr:\n{error}")
+                    return "\n\n".join(parts) if parts else "Executed with no output."
+            except Exception:
+                pass
+        # Classic javac compile and java run
+        if javac_bin:
+            c_res = subprocess.run(
+                [javac_bin, str(path.name)],
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=timeout, cwd=str(path.parent)
+            )
+            if c_res.returncode != 0:
+                return f"Java Compilation Error:\n{c_res.stderr.strip() or c_res.stdout.strip()}"
+            class_name = path.stem
+            if java_bin:
+                return _exec_cmd([java_bin, "-cp", ".", class_name] + args, path.parent, timeout)
+        return "Failed to run Java file."
+
+    # C (.c)
+    elif ext == ".c":
+        compiler = shutil.which("gcc") or shutil.which("clang")
+        if not compiler:
+            return "C compiler (gcc/clang) is not installed in system PATH. Cannot execute C code directly in terminal."
+        out_exe = path.with_suffix(".exe" if platform.system() == "Windows" else "")
+        c_res = subprocess.run([compiler, str(path), "-o", str(out_exe)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=str(path.parent))
+        if c_res.returncode != 0:
+            return f"C Compilation Error:\n{c_res.stderr.strip() or c_res.stdout.strip()}"
+        return _exec_cmd([str(out_exe)] + args, path.parent, timeout)
+
+    # C++ (.cpp, .cc, .cxx)
+    elif ext in (".cpp", ".cc", ".cxx"):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            return "C++ compiler (g++/clang++) is not installed in system PATH. Cannot execute C++ code directly in terminal."
+        out_exe = path.with_suffix(".exe" if platform.system() == "Windows" else "")
+        c_res = subprocess.run([compiler, str(path), "-o", str(out_exe)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=str(path.parent))
+        if c_res.returncode != 0:
+            return f"C++ Compilation Error:\n{c_res.stderr.strip() or c_res.stdout.strip()}"
+        return _exec_cmd([str(out_exe)] + args, path.parent, timeout)
+
+    # Go (.go)
+    elif ext == ".go":
+        if not shutil.which("go"):
+            return "Go compiler is not installed in system PATH. Cannot execute Go code directly in terminal."
+        return _exec_cmd(["go", "run", str(path)] + args, path.parent, timeout)
+
+    # Rust (.rs)
+    elif ext == ".rs":
+        rustc_bin = shutil.which("rustc")
+        if not rustc_bin:
+            return "Rust compiler (rustc) is not installed in system PATH. Cannot execute Rust code directly in terminal."
+        out_exe = path.with_suffix(".exe" if platform.system() == "Windows" else "")
+        c_res = subprocess.run([rustc_bin, str(path), "-o", str(out_exe)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=str(path.parent))
+        if c_res.returncode != 0:
+            return f"Rust Compilation Error:\n{c_res.stderr.strip() or c_res.stdout.strip()}"
+        return _exec_cmd([str(out_exe)] + args, path.parent, timeout)
+
+    # C# (.cs)
+    elif ext == ".cs":
+        if shutil.which("dotnet"):
+            return _exec_cmd(["dotnet", "run", "--project", str(path.parent)] + args, path.parent, timeout)
+        return "dotnet CLI is not installed in system PATH. Cannot execute C# directly in terminal."
+
+    # Shell / Bash (.sh)
+    elif ext == ".sh":
+        bash_bin = shutil.which("bash") or shutil.which("sh")
+        if not bash_bin:
+            return "Bash is not installed in system PATH. Cannot execute shell script."
+        return _exec_cmd([bash_bin, str(path)] + args, path.parent, timeout)
+
+    # PowerShell (.ps1)
+    elif ext == ".ps1":
+        return _exec_cmd(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(path)] + args, path.parent, timeout)
+
+    # Batch (.bat, .cmd)
+    elif ext in (".bat", ".cmd"):
+        return _exec_cmd(["cmd.exe", "/c", str(path)] + args, path.parent, timeout)
+
+    # HTML (.html)
+    elif ext == ".html":
+        if platform.system() == "Windows":
+            try:
+                os.startfile(str(path))
+            except Exception:
+                pass
+        return f"Opened {path.name} in your web browser."
+
+    return f"No execution runner configured for {ext} files."
+
+
+def _build(description, language, output_path, args, timeout, speak=None, player=None, open_editor=False) -> str:
     if not description:
         return "Please describe what you want me to build, sir."
 
@@ -267,19 +496,35 @@ def _build(description, language, output_path, args, timeout, speak=None, player
         if speak: speak(msg)
         return msg
 
-    last_output = ""
+    editor_msg = ""
+    if open_editor:
+        if _open_vscode(path):
+            editor_msg = " Opened in VS Code."
+
+    last_output = _run_file(path, args, timeout)
+
+    # If runtime or compiler is missing, do not attempt broken fix cycles
+    if "is not installed" in last_output.lower() or "not configured" in last_output.lower():
+        msg = (
+            f"Created {path.name} on your Desktop.{editor_msg} "
+            f"{last_output}"
+        )
+        if speak: speak(msg)
+        return f"{msg}\n\nCode Preview:\n{_preview(code)}"
+
     for attempt in range(1, MAX_BUILD_ATTEMPTS + 1):
         print(f"[Code] 🔄 Attempt {attempt}/{MAX_BUILD_ATTEMPTS}")
         if player:
             player.write_log(f"[Code] Attempt {attempt}...")
 
-        last_output = _run_file(path, args, timeout)
+        if attempt > 1:
+            last_output = _run_file(path, args, timeout)
 
         if not _has_error(last_output):
             msg = (
                 f"Build complete, sir. "
                 f"The code is working after {attempt} attempt{'s' if attempt > 1 else ''}. "
-                f"Saved to {path}."
+                f"Saved to {path}.{editor_msg}"
             )
             if speak: speak(msg)
             return f"{msg}\n\nOutput:\n{last_output}"
@@ -301,9 +546,10 @@ def _build(description, language, output_path, args, timeout, speak=None, player
         f"The last error was: {last_output[:200]}"
     )
     if speak: speak(msg)
-    return f"{msg}\n\nLast code saved to: {path}"
+    return f"{msg}\n\nLast code saved to: {path}.{editor_msg}"
 
-def _write_action(description, language, output_path, player) -> str:
+
+def _write_action(description, language, output_path, player, open_editor=False) -> str:
     if not description:
         return "Please describe what you want me to write, sir."
     if player:
@@ -311,7 +557,11 @@ def _write_action(description, language, output_path, player) -> str:
     try:
         code, path = _write(description, language, output_path, player)
         print(f"[Code] ✅ Written: {path}")
-        return f"Code written. Saved to: {path}\n\nPreview:\n{_preview(code)}"
+        editor_msg = ""
+        if open_editor:
+            if _open_vscode(path):
+                editor_msg = "\n💻 Opened in Visual Studio Code."
+        return f"Code written. Saved to: {path}{editor_msg}\n\nPreview:\n{_preview(code)}"
     except Exception as e:
         return f"Could not generate code: {e}"
 
@@ -380,15 +630,30 @@ Explanation:"""
         return f"Could not explain code: {e}"
 
 
-def _run_action(file_path, args, timeout, player) -> str:
+def _run_action(file_path, args, timeout, player, open_editor=False) -> str:
     if not file_path:
         return "Please provide a file path to run, sir."
     p = Path(file_path)
     if not p.exists():
+        desktop_p = _get_desktop_dir() / file_path
+        if desktop_p.exists():
+            p = desktop_p
+        else:
+            for ext in [".py", ".java", ".js", ".c", ".cpp", ".ts", ".go", ".rs"]:
+                candidate = _get_desktop_dir() / f"{file_path}{ext}"
+                if candidate.exists():
+                    p = candidate
+                    break
+    if not p.exists():
         return f"File not found: {file_path}"
+    editor_msg = ""
+    if open_editor:
+        if _open_vscode(p):
+            editor_msg = "\n💻 Opened in Visual Studio Code."
     if player:
         player.write_log(f"[Code] Running {p.name}...")
-    return _run_file(p, args, timeout)
+    res = _run_file(p, args, timeout)
+    return f"{res}{editor_msg}"
 
 
 def _optimize_action(file_path, code, language, output_path, player) -> str:
@@ -570,13 +835,14 @@ def code_helper(
     code        = p.get("code", "").strip()
     args        = p.get("args", [])
     timeout     = int(p.get("timeout", 30))
+    open_editor = _wants_vscode(description, p)
 
     if action == "auto":
         action = _detect_intent(description, file_path, code)
         print(f"[Code] 🤖 Auto-detected: {action}")
 
     if action == "write":
-        return _write_action(description, language, output_path, player)
+        return _write_action(description, language, output_path, player, open_editor=open_editor)
 
     elif action == "edit":
         return _edit_action(
@@ -589,10 +855,10 @@ def code_helper(
         return _explain_action(file_path, code, player)
 
     elif action == "run":
-        return _run_action(file_path, args, timeout, player)
+        return _run_action(file_path, args, timeout, player, open_editor=open_editor)
 
     elif action == "build":
-        return _build(description, language, output_path, args, timeout, speak, player)
+        return _build(description, language, output_path, args, timeout, speak, player, open_editor=open_editor)
 
     elif action == "optimize":
         return _optimize_action(file_path, code, language, output_path, player)

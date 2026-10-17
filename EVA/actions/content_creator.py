@@ -313,11 +313,30 @@ def content_creator(parameters: dict, response=None, player=None, session_memory
     if format_name not in {"pdf", "docx", "pptx", *_TEXT_FORMATS, *supported_code_extensions} and not requested_code:
         return "Supported creation formats are PDF, DOCX/Word, PPTX/PowerPoint, TXT, Markdown, HTML, JSON, and code languages."
     count = max(1, min(int(params.get("count", params.get("slides", 10))), 30))
-    destination = Path(params.get("destination") or OUTPUT_DIR).expanduser()
+    req_low = request.lower()
+    default_dest = OUTPUT_DIR
+    if (requested_code or format_name in supported_code_extensions) and ("desktop" in req_low or any(term in req_low for term in ("vscode", "vs code", "vls code"))):
+        try:
+            from actions.code_helper import _get_desktop_dir
+            default_dest = _get_desktop_dir()
+        except Exception:
+            pass
+    destination = Path(params.get("destination") or default_dest).expanduser()
     destination.mkdir(parents=True, exist_ok=True)
 
     service = DocumentService()
-    output = service._next_safe_path(destination, _safe_name(params.get('name') or request), format_name)
+    raw_name = params.get('name')
+    if not raw_name and (requested_code or (format_name in supported_code_extensions and format_name not in _TEXT_FORMATS)):
+        try:
+            from actions.code_helper import _infer_slug_from_description
+            slug = _infer_slug_from_description(request, fallback="Main")
+            raw_name = slug.capitalize() if format_name == "java" else slug
+        except Exception:
+            raw_name = request
+    else:
+        raw_name = raw_name or request
+
+    output = service._next_safe_path(destination, _safe_name(raw_name), format_name)
     started_at = time.monotonic()
     if player:
         player.write_log(f"[content_creator] Creating {format_name.upper()} at {output}")
@@ -351,6 +370,14 @@ def content_creator(parameters: dict, response=None, player=None, session_memory
         if not output.exists() or output.stat().st_size == 0:
             raise RuntimeError("The output file was not written correctly.")
         result = f"Created {format_name.upper()} file: {output} ({time.monotonic() - started_at:.1f}s)"
+        if requested_code or (format_name in supported_code_extensions and format_name not in _TEXT_FORMATS):
+            if any(term in req_low for term in ("vscode", "vs code", "vls code", "editor", "in code")):
+                try:
+                    from actions.code_helper import _open_vscode
+                    if _open_vscode(output):
+                        result += "\n💻 Opened in Visual Studio Code."
+                except Exception:
+                    pass
         if speak:
             speak(result)
         return result

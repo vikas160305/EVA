@@ -406,18 +406,19 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "code_helper",
-        "description": "Writes, edits, explains, runs, or builds code files.",
+        "description": "Writes, edits, explains, runs, or builds code files in any language (Java, Python, C, C++, JavaScript, TypeScript, Go, Rust, HTML, etc.). Opens and runs code in Visual Studio Code (VS Code) when requested.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "write | edit | explain | run | build | auto (default: auto)"},
-                "description": {"type": "STRING", "description": "What the code should do or what change to make"},
-                "language":    {"type": "STRING", "description": "Programming language (default: python)"},
-                "output_path": {"type": "STRING", "description": "Where to save the file"},
-                "file_path":   {"type": "STRING", "description": "Path to existing file for edit/explain/run/build"},
-                "code":        {"type": "STRING", "description": "Raw code string for explain"},
-                "args":        {"type": "STRING", "description": "CLI arguments for run/build"},
-                "timeout":     {"type": "INTEGER", "description": "Execution timeout in seconds (default: 30)"},
+                "action":         {"type": "STRING", "description": "write | edit | explain | run | build | auto (default: auto)"},
+                "description":    {"type": "STRING", "description": "What the code should do or what change to make"},
+                "language":       {"type": "STRING", "description": "Programming language: java, python, c, cpp, javascript, typescript, go, rust, html, etc. (default: python)"},
+                "output_path":    {"type": "STRING", "description": "Where to save the file (default: Desktop)"},
+                "file_path":      {"type": "STRING", "description": "Path to existing file for edit/explain/run/build"},
+                "code":           {"type": "STRING", "description": "Raw code string for explain"},
+                "args":           {"type": "STRING", "description": "CLI arguments for run/build"},
+                "open_in_editor": {"type": "BOOLEAN", "description": "Whether to open the file in VS Code (default true if user mentions VS Code)"},
+                "timeout":        {"type": "INTEGER", "description": "Execution timeout in seconds (default: 30)"},
             },
             "required": ["action"]
         }
