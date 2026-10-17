@@ -409,7 +409,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "file_controller",
-        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, open, disk usage. For every request to find or open a file or folder by spoken name, first use action='find' with path='all'. Search all local drives and common user folders; never claim folders are inaccessible just because a narrow search failed. Infer extensions and file categories from separately spoken type words. For an explicitly supplied absolute path, use action='open' directly. Open one result automatically only when exactly one result exists; when multiple results exist, show numbered choices and wait for the user's selection.",
+        "description": "Manages files and folders: open, find, list, create, delete, move, copy, rename, read, write, disk usage. For EVERY request to OPEN a file or folder (e.g. 'open factorial.java', 'open freedom.docx', 'open my document', 'open file X'), use action='open' with name=<filename>. It automatically searches all drives and common user folders, and immediately opens and displays the file on the user's screen. If multiple matches exist, it shows numbered choices. For search-only requests ('where is file X', 'find file X'), use action='find'.",
         "parameters": {
             "type": "OBJECT",
             "properties": {

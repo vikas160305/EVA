@@ -580,30 +580,51 @@ def _extension_set(extension: str) -> set[str]:
     return {query} if query else set()
 
 
+def _clean_file_search_name(raw_name: str) -> str:
+    """Strip speech artifacts and leading/trailing filler words like 'the file', 'file', 'document'."""
+    name = (raw_name or "").strip()
+    name = re.sub(
+        r"^(?:the\s+)?(?:file|folder|document|presentation|code|script)\s+(?:named\s+|called\s+|of\s+)?",
+        "", name, flags=re.IGNORECASE
+    )
+    name = re.sub(r"\s+(?:file|folder|document)$", "", name, flags=re.IGNORECASE)
+    return name.strip() or raw_name.strip()
+
+
 def _normalise_spoken_search(name: str, extension: str = "") -> tuple[str, str]:
-    """Turn voice-style names such as ``W11 PDF`` into search terms.
+    """Turn voice-style names such as ``W11 PDF`` or ``factorial java`` into search terms.
 
     Speech recognition often returns the file type as a final word rather than
-    putting it in the extension field.  Searching the phrase literally cannot
-    match a normal filename such as ``W11.pdf``.
+    putting it in the extension field. Searching the phrase literally cannot
+    match a normal filename such as ``W11.pdf`` or ``factorial.java``.
     """
-    clean_name = (name or "").strip()
+    clean_name = _clean_file_search_name(name)
     clean_extension = (extension or "").strip()
     if clean_extension or not clean_name:
         return clean_name, clean_extension
 
     match = re.match(
-        r"^(?P<stem>.+?)\s+(?P<extension>pdf|docx?|xlsx?|pptx?|txt|csv|jpe?g|png|gif|webp|mp[34]|mkv|wav|flac|m4a|document|documents|spreadsheet|sheet|presentation|slides|image|photo|picture|video|music|audio)$",
+        r"^(?P<stem>.+?)\s+(?P<extension>pdf|docx?|xlsx?|pptx?|txt|csv|jpe?g|png|gif|webp|mp[34]|mkv|wav|flac|m4a|java|py|python|c|cpp|cs|html|css|js|ts|json|md|xml|sql|sh|bat|document|documents|spreadsheet|sheet|presentation|slides|image|photo|picture|video|music|audio|code|file)$",
         clean_name,
         flags=re.IGNORECASE,
     )
     if match:
         spoken_extension = match.group("extension").lower()
+        alias_map = {
+            "python": ".py",
+            "code": "code",
+            "file": "file",
+        }
         categories = {
             "document", "documents", "spreadsheet", "sheet", "presentation",
-            "slides", "image", "photo", "picture", "video", "music", "audio",
+            "slides", "image", "photo", "picture", "video", "music", "audio", "code", "file",
         }
-        extension = spoken_extension if spoken_extension in categories else "." + spoken_extension
+        if spoken_extension in alias_map:
+            extension = alias_map[spoken_extension]
+        elif spoken_extension in categories:
+            extension = spoken_extension
+        else:
+            extension = "." + spoken_extension
         return match.group("stem").strip(), extension
     return clean_name, clean_extension
 
@@ -877,14 +898,24 @@ def _find_latest_file(category: str = "") -> Path | None:
 def _quick_find_file(name: str, path_hint: str = "") -> Path | None:
     if not name:
         return None
-    name_clean = name.strip()
+    name_clean = _clean_file_search_name(name)
     name_lower = name_clean.lower()
 
     priority_folders = [
         Path.home() / "Documents" / "JARVIS Created",
+        Path.home() / "OneDrive" / "Documents" / "JARVIS Created",
         _get_desktop(),
+        Path.home() / "Desktop",
         _get_documents(),
+        Path.home() / "Documents",
         _get_downloads(),
+        Path.home() / "Downloads",
+        _get_desktop() / "EVA Created",
+        _get_documents() / "EVA Created",
+        _get_music() / "EVA Songs",
+        _get_pictures() / "EVA Images",
+        _get_videos() / "EVA Videos",
+        _get_downloads() / "EVA Downloads",
         Path.cwd(),
         Path.home(),
     ]
@@ -908,7 +939,7 @@ def _quick_find_file(name: str, path_hint: str = "") -> Path | None:
         except Exception:
             continue
 
-    # 2. Case-insensitive or stem match
+    # 2. Case-insensitive or stem match (e.g. 'factorial' matches 'factorial.java')
     for folder in priority_folders:
         try:
             if not folder.exists() or not folder.is_dir():
@@ -928,23 +959,56 @@ def _quick_find_file(name: str, path_hint: str = "") -> Path | None:
     return None
 
 
-def _open_target(target: Path) -> str:
+def _open_target(target: Path, open_in: str = "") -> str:
     """Open an existing path. Callers are responsible for access checks."""
     if not target.exists():
         return f"Not found: {target}"
 
-    # Open directories in file manager; open files with the default associated application
+    target_resolved = target.resolve(strict=False)
+    ext = target_resolved.suffix.lower()
+
+    # Open directories in file manager; open files with default application or editor
     if _OS == "Windows":
-        if target.is_dir():
-            subprocess.Popen(["explorer", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
+        if target_resolved.is_dir():
+            subprocess.Popen(["explorer.exe", str(target_resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return f"Opened: {target}"
+
+        is_code = ext in {".java", ".py", ".c", ".cpp", ".cs", ".js", ".ts", ".html", ".css", ".json", ".md", ".xml", ".sql", ".sh", ".bat", ".yaml", ".yml"}
+        wants_vscode = open_in.lower() in ("vscode", "code", "vs code", "vls code") or (is_code and ext in {".java", ".c", ".cpp", ".cs", ".ts", ".js"})
+
+        if wants_vscode:
             try:
-                os.startfile(str(target))
+                from actions.code_helper import _open_vscode
+                if _open_vscode(target_resolved):
+                    return f"Opened: {target}"
             except Exception:
+                pass
+
+        opened = False
+        try:
+            os.startfile(str(target_resolved))
+            opened = True
+        except Exception:
+            if is_code or ext in {".txt", ".log", ".cfg", ".ini", ".env", ".properties"}:
                 try:
-                    subprocess.Popen(f'explorer /select,"{target}"', shell=True)
+                    from actions.code_helper import _open_vscode
+                    if _open_vscode(target_resolved):
+                        return f"Opened: {target}"
                 except Exception:
-                    subprocess.Popen(["explorer", str(target.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    pass
+                try:
+                    subprocess.Popen(["notepad.exe", str(target_resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return f"Opened: {target}"
+                except Exception:
+                    pass
+
+        if not opened:
+            try:
+                subprocess.Popen(f'explorer.exe /select,"{target_resolved}"', shell=True)
+            except Exception:
+                subprocess.Popen(["explorer.exe", str(target_resolved.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        return f"Opened: {target}"
     elif _OS == "Darwin":
         subprocess.Popen(["open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
@@ -1643,7 +1707,7 @@ def file_controller(
                     name = path_str
                     path = "all"
 
-            name_clean = (name or "").strip()
+            name_clean = _clean_file_search_name(name)
             name_lower = name_clean.lower()
 
             # 2. Handle requests for "latest", "recent", "the file", "the document", "the presentation", etc.
@@ -1653,7 +1717,7 @@ def file_controller(
                     return open_discovered_path(latest_hit)
 
             # 3. Check pending search selection (e.g. user selected "1" or "2")
-            selected = _select_pending_result(name)
+            selected = _select_pending_result(name_clean)
             if selected:
                 return open_discovered_path(selected)
 
@@ -1664,7 +1728,7 @@ def file_controller(
 
             # 5. Check if direct resolve_safe_path hits a valid path
             try:
-                target = resolve_safe_path(path, name)
+                target = resolve_safe_path(path, name_clean)
                 if target.exists():
                     return open_discovered_path(target)
             except Exception:
@@ -1673,7 +1737,7 @@ def file_controller(
             # 6. Deep search across local drives
             item_type = "folder" if action in ("open_folder", "explore") else "file"
             result_text = find_files(
-                name=name,
+                name=name_clean,
                 extension=params.get("extension", ""),
                 path=path if path in {"all", "home", "desktop", "downloads", "documents"} else "all",
                 max_results=min(int(params.get("max_results", 20)), 50),
@@ -1690,27 +1754,58 @@ def file_controller(
                     + "\nWhich one should I open? Reply with a number, the full path, "
                     "or a unique folder/file name."
                 )
-            return result_text or f"Could not find or open: {name or path}"
+            return result_text or f"Could not find or open: {name_clean or path}"
 
         elif action == "find":
-            do_open = bool(params.get("open", False))
+            # 1. Normalize parameters if path was passed as the filename
+            if not name and path:
+                path_str = str(path).strip()
+                p_obj = Path(path_str)
+                path_lower = path_str.lower()
+                if p_obj.is_absolute():
+                    if p_obj.exists():
+                        return open_discovered_path(p_obj.resolve(strict=False))
+                    name = p_obj.name
+                    path = "all"
+                elif p_obj.suffix or path_lower not in {"desktop", "downloads", "documents", "pictures", "images", "videos", "music", "home", "all", "user", "this pc", ""}:
+                    name = path_str
+                    path = "all"
+
+            name_clean = _clean_file_search_name(name)
+            name_lower = name_clean.lower()
+
+            # 2. Check pending selection if user picked a numbered result
+            selected = _select_pending_result(name_clean)
+            if selected:
+                return open_discovered_path(selected)
+
+            # 3. Determine if we should open single match:
+            # If open parameter is omitted (None) or True, auto-open!
+            # Only suppress opening if open is explicitly passed as False.
+            raw_open = params.get("open")
+            do_open = True if raw_open is None else bool(raw_open)
+
+            # 4. If do_open is True, try quick find first!
+            if do_open and name_clean:
+                quick_hit = _quick_find_file(name_clean, path_hint=str(path or ""))
+                if quick_hit:
+                    return open_discovered_path(quick_hit)
+
+            # 5. Search files
             item_type = params.get("item_type", params.get("type", "both"))
             result_text = find_files(
-                name=name or params.get("name", ""),
+                name=name_clean or params.get("name", ""),
                 extension=params.get("extension", ""),
                 path=path,
                 max_results=min(int(params.get("max_results", 20)), 50),
                 item_type=item_type,
             )
-            if not do_open:
-                return result_text
-
             with _SEARCH_SELECTION_LOCK:
                 selected_results = list(_LAST_SEARCH_RESULTS)
-            if len(selected_results) == 1:
+            if len(selected_results) == 1 and do_open:
                 selected = selected_results[0]
                 return open_discovered_path(selected)
-            if len(selected_results) > 1:
+            if len(selected_results) > 1 and do_open:
                 return (
                     result_text
                     + "\nWhich one should I open? Reply with a number, the full path, "

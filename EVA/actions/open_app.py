@@ -277,6 +277,18 @@ def open_app(
         except Exception as e:
             print(f"[open_app] Redirection to install_app failed: {e}")
 
+    # If app_name is actually a file, document, or code path, delegate to file_controller
+    has_ext = "." in app_name and len(app_name.rsplit(".", 1)[-1]) in (2, 3, 4, 5)
+    is_file_phrase = any(lower.startswith(p) for p in ("file ", "the file ", "document ", "the document ")) or any(lower.endswith(s) for s in (" file", " document"))
+    if has_ext or is_file_phrase:
+        try:
+            from actions.file_controller import file_controller
+            res = file_controller(parameters={"action": "open", "name": app_name}, player=player)
+            if res and not res.startswith("Could not find") and not res.startswith("Not found"):
+                return res
+        except Exception as e:
+            print(f"[open_app] Redirection to file_controller failed: {e}")
+
     launcher = _OS_LAUNCHERS.get(_SYSTEM)
     if launcher is None:
         return f"Unsupported operating system: {_SYSTEM}"

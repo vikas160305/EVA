@@ -85,3 +85,56 @@ def test_open_safe_file_uses_default_application(monkeypatch, safe_root):
 
     assert result == f"Opened: {target}"
     assert calls
+
+
+def test_clean_file_search_name():
+    assert fc._clean_file_search_name("file factorial.java") == "factorial.java"
+    assert fc._clean_file_search_name("the file freedom.docx") == "freedom.docx"
+    assert fc._clean_file_search_name("code factorial") == "factorial"
+    assert fc._clean_file_search_name("document notes file") == "notes"
+    assert fc._clean_file_search_name("notes.txt") == "notes.txt"
+
+
+def test_find_action_auto_opens_single_match(monkeypatch, safe_root):
+    target = safe_root / "single_match.txt"
+    target.write_text("content", encoding="utf-8")
+    opened_calls = []
+
+    monkeypatch.setattr(fc, "_open_target", lambda path, **kw: opened_calls.append(str(path)) or f"Opened: {path}")
+
+    # 1. action=find with no open param -> defaults to auto-open if 1 match
+    res = fc.file_controller({"action": "find", "name": "single_match.txt", "path": str(safe_root)})
+    assert f"Opened: {target}" in res
+    assert len(opened_calls) == 1
+
+    # 2. action=find with open=False -> returns listing text only, does not open
+    opened_calls.clear()
+    res2 = fc.file_controller({"action": "find", "name": "single_match.txt", "path": str(safe_root), "open": False})
+    assert "Found 1 matching item(s):" in res2
+    assert len(opened_calls) == 0
+
+
+def test_open_action_strips_speech_prefix_and_opens(monkeypatch, safe_root):
+    target = safe_root / "test_program.py"
+    target.write_text("print('hello')", encoding="utf-8")
+    opened_calls = []
+
+    monkeypatch.setattr(fc, "_open_target", lambda path, **kw: opened_calls.append(str(path)) or f"Opened: {path}")
+
+    res = fc.file_controller({"action": "open", "name": "the file test_program.py", "path": str(safe_root)})
+    assert f"Opened: {target}" in res
+    assert len(opened_calls) == 1
+
+
+def test_open_app_delegates_to_file_controller(monkeypatch, safe_root):
+    from actions.open_app import open_app
+    target = safe_root / "document.pdf"
+    target.write_text("fake pdf", encoding="utf-8")
+    opened_calls = []
+
+    monkeypatch.setattr(fc, "_open_target", lambda path, **kw: opened_calls.append(str(path)) or f"Opened: {path}")
+
+    res = open_app(parameters={"app_name": str(target)})
+    assert f"Opened: {target}" in res
+    assert len(opened_calls) == 1
+
