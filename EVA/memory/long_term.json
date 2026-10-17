@@ -23,11 +23,5 @@
       "last_hash": "0a6794eab99e"
     }
   },
-  "sessions": [
-    {
-      "date": "2026-10-17",
-      "summary": "The user attempted to install Spotify, accessed several local files and folders with JARVIS's assistance, and had the assistant create both a document and a PowerPoint presentation covering recent AI updates.",
-      "language": "English"
-    }
-  ]
+  "sessions": []
 }

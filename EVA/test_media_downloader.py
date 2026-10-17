@@ -12,7 +12,9 @@ from actions.media_downloader import (
     _reveal_in_explorer,
     _download_song,
     _download_video,
+    _download_web_file,
     _download_direct_file,
+    _resolve_web_file_url,
     media_downloader,
 )
 from main import TOOL_DECLARATIONS
@@ -24,11 +26,20 @@ def test_detect_category():
     assert _detect_category("save iron man wallpaper 4k from google") == "image"
     assert _detect_category("download photos of cute cats") == "image"
     assert _detect_category("download python tutorial video") == "video"
-    assert _detect_category("download python cheatsheet pdf") == "file"
+    assert _detect_category("download python cheatsheet pdf") == "document"
+    assert _detect_category("download titanic dataset csv") == "dataset"
+    assert _detect_category("download 7zip windows installer") == "installer"
+    assert _detect_category("download quicksort python code") == "code"
+    assert _detect_category("download sample test file") == "file"
+
     # Parameter override
     assert _detect_category("some random query", category_param="song") == "song"
     assert _detect_category("some random query", category_param="image") == "image"
     assert _detect_category("some random query", category_param="video") == "video"
+    assert _detect_category("some random query", category_param="document") == "document"
+    assert _detect_category("some random query", category_param="dataset") == "dataset"
+    assert _detect_category("some random query", category_param="installer") == "installer"
+    assert _detect_category("some random query", category_param="code") == "code"
     assert _detect_category("some random query", category_param="file") == "file"
 
 
@@ -56,6 +67,26 @@ def test_get_media_dir():
     assert vid_dir.exists()
     assert "EVA Videos" in str(vid_dir)
 
+    doc_dir = _get_media_dir("document")
+    assert isinstance(doc_dir, Path)
+    assert doc_dir.exists()
+    assert "EVA Documents" in str(doc_dir)
+
+    data_dir = _get_media_dir("dataset")
+    assert isinstance(data_dir, Path)
+    assert data_dir.exists()
+    assert "EVA Datasets" in str(data_dir)
+
+    inst_dir = _get_media_dir("installer")
+    assert isinstance(inst_dir, Path)
+    assert inst_dir.exists()
+    assert "EVA Installers" in str(inst_dir)
+
+    code_dir = _get_media_dir("code")
+    assert isinstance(code_dir, Path)
+    assert code_dir.exists()
+    assert "EVA Code" in str(code_dir)
+
     dl_dir = _get_media_dir("file")
     assert isinstance(dl_dir, Path)
     assert dl_dir.exists()
@@ -80,7 +111,6 @@ def test_reveal_in_explorer():
 def test_download_song_mocked():
     with tempfile.TemporaryDirectory() as td:
         dest = Path(td)
-        # Create a mock mp3 in the destination folder
         mock_mp3 = dest / "Imagine Dragons - Believer.mp3"
         mock_mp3.write_bytes(b"mock mp3 data")
 
@@ -117,6 +147,8 @@ def test_download_direct_file_mocked():
         dest = Path(td)
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.url = "https://example.com/cheatsheet.pdf"
+        mock_response.headers = {"Content-Type": "application/pdf"}
         mock_response.iter_content.return_value = [b"mock pdf bytes"]
 
         with patch("requests.get", return_value=mock_response):
@@ -124,6 +156,51 @@ def test_download_direct_file_mocked():
             assert ok is True
             assert "cheatsheet.pdf" in msg
             assert p.exists()
+
+
+def test_resolve_web_file_url_curated():
+    url, name = _resolve_web_file_url("download titanic dataset", "dataset")
+    assert url is not None
+    assert "titanic.csv" in url
+    assert name == "titanic.csv"
+
+    url_pdf, name_pdf = _resolve_web_file_url("download python cheatsheet pdf", "document")
+    assert url_pdf is not None
+    assert "python-cheatsheet.pdf" in url_pdf
+
+
+def test_download_web_file_dataset_mocked():
+    with tempfile.TemporaryDirectory() as td:
+        dest = Path(td)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {
+            "Content-Type": "text/csv",
+            "Content-Disposition": 'attachment; filename="titanic.csv"'
+        }
+        mock_response.iter_content.return_value = [b"PassengerId,Survived\n1,0\n2,1"]
+
+        with patch("requests.get", return_value=mock_response):
+            ok, msg, p = _download_web_file("titanic dataset", dest, category="dataset")
+            assert ok is True
+            assert "titanic.csv" in msg
+            assert p.exists()
+            assert p.suffix == ".csv"
+
+
+def test_media_downloader_integration_dataset():
+    with patch("actions.media_downloader._download_web_file") as mock_dl, \
+         patch("actions.media_downloader._reveal_in_explorer") as mock_reveal:
+        fake_path = Path("fake_dataset.csv")
+        mock_dl.return_value = (True, "Downloaded 'fake_dataset.csv' (60.3 KB) to EVA Datasets.", fake_path)
+
+        res = media_downloader({
+            "query": "download titanic dataset csv from google",
+            "open_in_explorer": True
+        })
+        assert "Downloaded 'fake_dataset.csv'" in res
+        assert "File Explorer" in res
+        assert mock_reveal.called
 
 
 def test_media_downloader_integration_song():
@@ -149,3 +226,4 @@ def test_tool_declarations_media_downloader():
     assert "category" in md_tool["parameters"]["properties"]
     assert "source" in md_tool["parameters"]["properties"]
     assert "open_in_explorer" in md_tool["parameters"]["properties"]
+

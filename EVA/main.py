@@ -164,9 +164,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "media_downloader",
         "description": (
-            "Universal downloader for songs (MP3), music, audio, images, videos (MP4), documents, or files from Google, Chrome, YouTube, or the web. "
+            "Universal downloader for songs (MP3), music, audio, images, videos (MP4), documents (PDF, DOCX), datasets (CSV, Excel), installers (EXE, ZIP), code scripts, or files from Google, Chrome, YouTube, or the web. "
             "Use whenever the user asks to download, save, or fetch any song, music track, audio, image, photo, wallpaper, "
-            "video, or file/document from Google, Chrome, or the internet, and save or view it in File Explorer. "
+            "video, document, dataset, installer, script, or file from Google, Chrome, or the internet, and save or view it in File Explorer. "
             "Supports downloading directly from the active Chrome tab or via accurate web search. "
             "Automatically opens and reveals the downloaded file in File Explorer."
         ),
@@ -175,11 +175,11 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "query": {
                     "type": "STRING",
-                    "description": "Song name, image description, search query, or file URL to download (e.g. 'Believer Imagine Dragons', 'iron man wallpaper 4k', 'python cheatsheet pdf')"
+                    "description": "Song name, image description, search query, or file URL to download (e.g. 'Believer Imagine Dragons', 'iron man wallpaper 4k', 'python cheatsheet pdf', 'titanic dataset csv')"
                 },
                 "category": {
                     "type": "STRING",
-                    "description": "song | image | video | file | auto (default: auto)"
+                    "description": "song | image | video | document | dataset | installer | code | file | auto (default: auto)"
                 },
                 "count": {
                     "type": "INTEGER",

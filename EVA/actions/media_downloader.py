@@ -12,13 +12,15 @@ import re
 import sys
 import time
 import shutil
+import base64
 import platform
 import subprocess
 from pathlib import Path
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, urljoin, unquote
 from typing import Optional, List, Dict, Tuple
 
 import requests
+from bs4 import BeautifulSoup
 
 _SYSTEM = platform.system()
 
@@ -44,6 +46,18 @@ def _get_media_dir(category: str) -> Path:
     elif cat in ("video", "videos", "movie", "clip"):
         folder_name = "Videos"
         sub_folder = "EVA Videos"
+    elif cat in ("document", "documents", "doc", "docs", "pdf", "book", "ebook", "cheatsheet"):
+        folder_name = "Documents"
+        sub_folder = "EVA Documents"
+    elif cat in ("dataset", "datasets", "data", "sheet", "spreadsheet"):
+        folder_name = "Downloads"
+        sub_folder = "EVA Datasets"
+    elif cat in ("installer", "installers", "app", "setup", "archive", "zip", "software"):
+        folder_name = "Downloads"
+        sub_folder = "EVA Installers"
+    elif cat in ("code", "script", "scripts", "repo", "program"):
+        folder_name = "Downloads"
+        sub_folder = "EVA Code"
     else:
         folder_name = "Downloads"
         sub_folder = "EVA Downloads"
@@ -114,18 +128,54 @@ def _detect_category(query: str, category_param: str = "auto") -> str:
             return "image"
         if cp in ("video", "clip", "movie", "mp4"):
             return "video"
-        if cp in ("file", "document", "pdf", "doc", "zip"):
+        if cp in ("document", "doc", "docs", "pdf", "book", "ebook", "cheatsheet"):
+            return "document"
+        if cp in ("dataset", "datasets", "data", "sheet", "spreadsheet", "csv", "excel"):
+            return "dataset"
+        if cp in ("installer", "installers", "setup", "archive", "zip", "exe", "msi"):
+            return "installer"
+        if cp in ("code", "script", "scripts", "repo"):
+            return "code"
+        if cp in ("file", "download", "direct"):
             return "file"
 
     q = query.lower()
+
+    # URL or file extension detection
+    parsed_path = urlparse(query).path.lower() if query.startswith(("http://", "https://")) else q
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg")):
+        return "song"
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv")):
+        return "video"
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico")):
+        return "image"
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt", ".rtf", ".epub", ".odt")):
+        return "document"
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".csv", ".xlsx", ".xls", ".tsv", ".parquet")):
+        return "dataset"
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".zip", ".rar", ".7z", ".tar.gz", ".tar", ".gz", ".exe", ".msi", ".dmg", ".iso")):
+        return "installer"
+    if any(parsed_path.endswith(ext) or ext + "?" in parsed_path for ext in (".py", ".js", ".ts", ".java", ".c", ".cpp", ".cs", ".go", ".rs", ".php", ".html", ".css", ".ipynb", ".sh", ".sql")):
+        return "code"
+
+    # Keyword detection
     if any(w in q for w in ("song", "music", "audio", "mp3", "track", "soundtrack", "tune", "singing", "album")):
         return "song"
-    if any(w in q for w in ("image", "images", "photo", "photos", "wallpaper", "picture", "pictures", "drawing", "logo")):
-        return "image"
-    if any(w in q for w in ("video", "videos", "clip", "movie", "mp4", "reel")):
+    if any(w in q for w in ("video", "videos", "clip", "movie", "mp4", "reel", "youtube video", "tutorial video")):
         return "video"
-    if any(w in q for w in ("pdf", "document", "cheatsheet", "doc", "docx", "zip", "rar", "csv", "xlsx")):
+    if any(w in q for w in ("dataset", "data set", "kaggle", "csv", "spreadsheet", "excel sheet", "xlsx", "records csv", "sales data", "training data", "test data")):
+        return "dataset"
+    if any(w in q for w in ("pdf", "cheatsheet", "cheat sheet", "document", "documentation", "whitepaper", "research paper", "handbook", "manual", "guide pdf", "ebook", "e-book", "book pdf", "lecture notes", "syllabus", "notes pdf", "sample resume", "resume template", "docx", "pptx")):
+        return "document"
+    if any(w in q for w in ("installer", "setup exe", "windows installer", "install file", "setup file", "zip file", "archive", "tar.gz", "msi installer", "executable", "7z")):
+        return "installer"
+    if any(w in q for w in ("source code", "github repo", "script", "python code", "java code", "c++ code", "javascript code", "starter code", "boilerplate", "implementation in python", "implementation in java")):
+        return "code"
+    if any(w in q for w in ("image", "images", "photo", "photos", "wallpaper", "picture", "pictures", "drawing", "illustration", "diagram", "screenshot", "logo", "icon", "vector art")):
+        return "image"
+    if any(w in q for w in ("file", "download")):
         return "file"
+
     return "image"
 
 
@@ -348,53 +398,351 @@ def _download_images(
     return False, f"Could not find valid downloadable images for '{query}'.", None
 
 
-def _download_direct_file(
+def _clean_filename(name: str) -> str:
+    """Sanitize filename to prevent path traversal and illegal Windows chars."""
+    clean = re.sub(r'[\\/*?:"<>|]', "_", name).strip(". ")
+    if len(clean) > 90:
+        p = Path(clean)
+        ext = p.suffix
+        stem = p.stem[:80]
+        clean = stem + ext
+    return clean or "downloaded_file"
+
+
+def _default_ext_for_category(category: str) -> str:
+    """Map category to default file extension."""
+    cat = category.lower().strip()
+    if cat == "document":
+        return ".pdf"
+    if cat == "dataset":
+        return ".csv"
+    if cat == "installer":
+        return ".zip"
+    if cat == "code":
+        return ".py"
+    if cat == "song":
+        return ".mp3"
+    if cat == "video":
+        return ".mp4"
+    if cat == "image":
+        return ".jpg"
+    return ".bin"
+
+
+def _extract_filename_from_response(
+    resp: requests.Response,
+    fallback_name: str,
+    default_ext: str = ""
+) -> str:
+    """Extract best filename from Content-Disposition, URL path, or Content-Type."""
+    cd = str(resp.headers.get("Content-Disposition", "") or "") if hasattr(resp, "headers") else ""
+    if cd:
+        m = re.search(r'filename\*?=(?:UTF-8\'\')?\"?([^;\"\']+)', cd)
+        if m:
+            extracted = unquote(m.group(1).strip())
+            if extracted:
+                return _clean_filename(extracted)
+
+    resp_url = str(getattr(resp, "url", "") or "")
+    if resp_url and isinstance(resp_url, str):
+        parsed_path = unquote(urlparse(resp_url).path)
+        path_name = Path(parsed_path).name
+        if path_name and "." in path_name and len(Path(path_name).suffix) <= 6:
+            return _clean_filename(path_name)
+
+    # Infer extension from Content-Type
+    ct = str(resp.headers.get("Content-Type", "") or "").split(";")[0].strip().lower() if hasattr(resp, "headers") else ""
+    ct_map = {
+        "application/pdf": ".pdf",
+        "text/csv": ".csv",
+        "application/json": ".json",
+        "application/zip": ".zip",
+        "application/x-zip-compressed": ".zip",
+        "application/x-7z-compressed": ".7z",
+        "application/x-tar": ".tar",
+        "application/gzip": ".tar.gz",
+        "application/x-msdownload": ".exe",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.ms-excel": ".xls",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "text/x-python": ".py",
+        "text/javascript": ".js",
+        "text/html": ".html",
+        "text/plain": ".txt",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "audio/mpeg": ".mp3",
+        "video/mp4": ".mp4",
+    }
+    ext = ct_map.get(ct, default_ext)
+    stem = _clean_filename(fallback_name)
+    if not Path(stem).suffix and ext:
+        stem += ext
+    return stem
+
+
+def _resolve_github_file(query: str, extensions: List[str]) -> Optional[Tuple[str, str]]:
+    """Search public GitHub repositories for direct raw file downloads."""
+    try:
+        clean_q = _clean_query(query)
+        headers = {"User-Agent": USER_AGENT}
+        url = f"https://api.github.com/search/repositories?q={quote_plus(clean_q)}&per_page=5"
+        resp = requests.get(url, headers=headers, timeout=6)
+        if resp.status_code != 200:
+            return None
+
+        items = resp.json().get("items", [])
+        for item in items:
+            repo_full_name = item.get("full_name")
+            if not repo_full_name:
+                continue
+            contents_url = f"https://api.github.com/repos/{repo_full_name}/contents"
+            c_resp = requests.get(contents_url, headers=headers, timeout=6)
+            if c_resp.status_code != 200:
+                continue
+
+            entries = c_resp.json()
+            if isinstance(entries, list):
+                for f in entries:
+                    if f.get("type") == "file":
+                        name = f.get("name", "")
+                        if any(name.lower().endswith(ext) for ext in extensions):
+                            raw_url = f.get("download_url")
+                            if raw_url:
+                                return raw_url, name
+    except Exception as e:
+        print(f"[media_downloader] GitHub file resolution warning: {e}")
+    return None
+
+
+def _search_web_links(query: str, max_results: int = 8) -> List[dict]:
+    """Search web using ddgs with multiple backends and Bing fallback."""
+    results = []
+
+    # 1. Try ddgs across api, html, and lite backends
+    try:
+        import ddgs
+        client = ddgs.DDGS()
+        for backend in ("api", "html", "lite"):
+            try:
+                raw_ddg = list(client.text(query, max_results=max_results, backend=backend))
+                if raw_ddg:
+                    for item in raw_ddg:
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("href", ""),
+                            "snippet": item.get("body", ""),
+                        })
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if results:
+        return results
+
+    # 2. Bing web search fallback
+    try:
+        headers = {"User-Agent": USER_AGENT}
+        resp = requests.get(f"https://www.bing.com/search?q={quote_plus(query)}", headers=headers, timeout=8)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for a in soup.select("li.b_algo h2 a"):
+                href = a.get("href", "")
+                if "bing.com/ck/a?" in href:
+                    m = re.search(r'[?&]u=a1([a-zA-Z0-9_\-]+)', href)
+                    if m:
+                        b64 = m.group(1).replace("-", "+").replace("_", "/")
+                        b64 += "=" * ((4 - len(b64) % 4) % 4)
+                        try:
+                            href = base64.b64decode(b64).decode("utf-8", errors="ignore")
+                        except Exception:
+                            continue
+                if href.startswith("http"):
+                    results.append({"title": a.get_text(), "url": href, "snippet": ""})
+    except Exception as e:
+        print(f"[media_downloader] Bing search fallback warning: {e}")
+
+    return results
+
+
+CURATED_SOURCES = {
+    "titanic": ("https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv", "titanic.csv"),
+    "iris": ("https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv", "iris.csv"),
+    "python cheatsheet": ("https://static.realpython.com/python-cheatsheet.pdf", "python-cheatsheet.pdf"),
+    "python cheat sheet": ("https://static.realpython.com/python-cheatsheet.pdf", "python-cheatsheet.pdf"),
+    "quicksort": ("https://raw.githubusercontent.com/TheAlgorithms/Python/master/sorts/quick_sort.py", "quick_sort.py"),
+}
+
+
+def _resolve_web_file_url(query: str, category: str) -> Tuple[Optional[str], Optional[str]]:
+    """Find direct download link for documents, datasets, installers, code, or files."""
+    q_lower = query.lower()
+
+    # Check curated instant sources
+    for key, (cur_url, cur_name) in CURATED_SOURCES.items():
+        if key in q_lower:
+            return cur_url, cur_name
+
+    # Handle direct URL passed in query
+    if query.startswith(("http://", "https://")):
+        url = query
+        if "github.com" in url and "/blob/" in url:
+            url = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+        p_name = Path(urlparse(url).path).name
+        return url, p_name or "downloaded_file"
+
+    # Define target file extensions by category
+    ext_map = {
+        "dataset": [".csv", ".xlsx", ".xls", ".json", ".tsv", ".parquet"],
+        "document": [".pdf", ".docx", ".doc", ".pptx", ".txt", ".epub"],
+        "installer": [".exe", ".msi", ".zip", ".rar", ".7z", ".tar.gz", ".dmg"],
+        "code": [".py", ".java", ".cpp", ".c", ".js", ".ts", ".html", ".css", ".ipynb", ".sh", ".sql", ".go", ".rs"],
+        "file": [".pdf", ".csv", ".zip", ".exe", ".docx", ".xlsx", ".py", ".txt"],
+    }
+    extensions = ext_map.get(category, ext_map["file"])
+
+    # For dataset or code, check GitHub repositories first
+    if category in ("dataset", "code"):
+        gh_match = _resolve_github_file(query, extensions)
+        if gh_match:
+            return gh_match
+
+    # Formulate targeted web search query
+    clean = _clean_query(query)
+    if category == "document" and not any(w in clean.lower() for w in ("pdf", "doc", "paper")):
+        search_q = f"{clean} pdf download"
+    elif category == "dataset" and not any(w in clean.lower() for w in ("csv", "xlsx", "data")):
+        search_q = f"{clean} csv dataset download"
+    elif category == "installer" and not any(w in clean.lower() for w in ("installer", "exe", "zip", "setup")):
+        search_q = f"{clean} windows installer download"
+    elif category == "code" and not any(w in clean.lower() for w in ("code", "github", "script")):
+        search_q = f"{clean} github code"
+    else:
+        search_q = f"{clean} download"
+
+    candidates = _search_web_links(search_q)
+
+    # Check candidates for direct links or GitHub blob links
+    for item in candidates:
+        url = item.get("url", "")
+        if not url:
+            continue
+        if "github.com" in url and "/blob/" in url:
+            raw_url = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+            return raw_url, Path(urlparse(raw_url).path).name
+
+        clean_path = urlparse(url).path.lower()
+        if any(clean_path.endswith(ext) for ext in extensions):
+            return url, Path(urlparse(url).path).name
+
+    # If no direct file URL found, scrape candidate HTML pages for download links
+    headers = {"User-Agent": USER_AGENT}
+    for item in candidates[:3]:
+        page_url = item.get("url", "")
+        if not page_url or not page_url.startswith("http"):
+            continue
+        try:
+            resp = requests.get(page_url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for a in soup.find_all("a"):
+                    h = a.get("href", "")
+                    if not h:
+                        continue
+                    clean_h = urlparse(h).path.lower()
+                    if any(clean_h.endswith(ext) for ext in extensions):
+                        resolved = urljoin(page_url, h)
+                        return resolved, Path(clean_h).name
+        except Exception:
+            continue
+
+    return None, None
+
+
+def _download_web_file(
     query_or_url: str,
     dest_folder: Path,
+    category: str = "file",
     player=None
 ) -> Tuple[bool, str, Optional[Path]]:
-    """Download a document, PDF, or general file."""
-    is_direct_url = query_or_url.startswith("http://") or query_or_url.startswith("https://")
-    target_url = query_or_url
+    """Download documents, datasets, installers, code, or general files."""
+    log_msg = f"Resolving download link for {category} '{query_or_url}'..."
+    print(f"[media_downloader] {log_msg}")
+    if player:
+        player.write_log(f"SYS: {log_msg}")
 
-    if not is_direct_url:
-        # Search web for file link
-        try:
-            from actions.web_search import _fetch_ddg_results
-            ddg = _fetch_ddg_results(f"{query_or_url} filetype:pdf")
-            if ddg and ddg[0].get("url"):
-                target_url = ddg[0]["url"]
-            else:
-                return False, f"Could not find a direct download link for '{query_or_url}'.", None
-        except Exception:
-            return False, f"Could not resolve download URL for '{query_or_url}'.", None
+    resolved_url, suggested_name = _resolve_web_file_url(query_or_url, category)
+    if not resolved_url:
+        return False, f"Could not find a downloadable {category} for '{query_or_url}'.", None
 
-    parsed = urlparse(target_url)
-    filename = Path(parsed.path).name or "downloaded_file"
-    if not Path(filename).suffix:
-        filename += ".pdf" if "pdf" in query_or_url.lower() else ".bin"
-
-    # Sanitize filename
-    clean_filename = re.sub(r'[\\/*?:"<>|]', "_", filename)
-    target_path = dest_folder / clean_filename
-
-    log_msg = f"Downloading file '{clean_filename}' from web..."
+    log_msg = f"Downloading {category} from '{resolved_url}'..."
     print(f"[media_downloader] {log_msg}")
     if player:
         player.write_log(f"SYS: {log_msg}")
 
     try:
-        resp = requests.get(target_url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=25)
+        resp = requests.get(
+            resolved_url,
+            headers={"User-Agent": USER_AGENT},
+            stream=True,
+            timeout=25
+        )
         resp.raise_for_status()
+
+        # Reject HTML responses if expecting binary/document/installer/dataset
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type and category in ("document", "dataset", "installer") and not resolved_url.endswith((".html", ".htm")):
+            return False, f"Download link returned an HTML webpage instead of a {category} file.", None
+
+        filename = _extract_filename_from_response(
+            resp,
+            fallback_name=suggested_name or _clean_query(query_or_url),
+            default_ext=_default_ext_for_category(category)
+        )
+        target_path = dest_folder / filename
+
+        total_bytes = 0
+        max_bytes = 150 * 1024 * 1024  # 150 MB limit
+
         with open(target_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 if chunk:
+                    total_bytes += len(chunk)
+                    if total_bytes > max_bytes:
+                        f.close()
+                        target_path.unlink(missing_ok=True)
+                        return False, "File exceeds maximum download size limit (150 MB).", None
                     f.write(chunk)
+
+        if not target_path.exists() or target_path.stat().st_size == 0:
+            return False, "Downloaded file was empty or could not be saved.", None
+
         size_kb = target_path.stat().st_size / 1024
-        msg = f"Downloaded '{clean_filename}' ({size_kb:.1f} KB) to {dest_folder.name}."
+        if size_kb >= 1024:
+            size_str = f"{size_kb / 1024:.1f} MB"
+        else:
+            size_str = f"{size_kb:.1f} KB"
+
+        msg = f"Downloaded '{filename}' ({size_str}) to {dest_folder.name}."
         return True, msg, target_path
+
     except Exception as e:
-        return False, f"File download failed: {e}", None
+        err_msg = f"File download failed: {e}"
+        print(f"[media_downloader] {err_msg}")
+        return False, err_msg, None
+
+
+def _download_direct_file(
+    query_or_url: str,
+    dest_folder: Path,
+    player=None
+) -> Tuple[bool, str, Optional[Path]]:
+    """Legacy wrapper for _download_web_file."""
+    return _download_web_file(query_or_url, dest_folder, category="file", player=player)
 
 
 def media_downloader(
@@ -402,11 +750,11 @@ def media_downloader(
     player=None,
     speak=None
 ) -> str:
-    """Download songs, images, videos, or files from Google, Chrome, or web.
+    """Download songs, images, videos, documents, datasets, installers, code, or files from Google, Chrome, or web.
     
     Parameters:
-        query (str): Search term, song title, image topic, or URL.
-        category (str): 'song' | 'image' | 'video' | 'file' | 'auto' (default: 'auto').
+        query (str): Search term, song title, image topic, document query, or URL.
+        category (str): 'song' | 'image' | 'video' | 'document' | 'dataset' | 'installer' | 'code' | 'file' | 'auto' (default: 'auto').
         count (int): Number of items (for images, default 3).
         source (str): 'auto' | 'google' | 'youtube' | 'chrome' (default: 'auto').
         url (str): Optional direct URL to download.
@@ -436,7 +784,7 @@ def media_downloader(
         clean_target = url_param
 
     if not clean_target:
-        return "Please specify what you would like to download (e.g. song name, image description, or file URL)."
+        return "Please specify what you would like to download (e.g. song name, image description, dataset topic, or file URL)."
 
     category = _detect_category(raw_query or clean_target, category_param)
     dest_folder = _get_media_dir(category)
@@ -451,11 +799,13 @@ def media_downloader(
         success, result_text, downloaded_file = _download_song(clean_target, dest_folder, player=player)
     elif category == "video":
         success, result_text, downloaded_file = _download_video(clean_target, dest_folder, player=player)
-    elif category == "file":
-        success, result_text, downloaded_file = _download_direct_file(clean_target, dest_folder, player=player)
-    else:  # Image
+    elif category == "image":
         success, result_text, downloaded_file = _download_images(
             clean_target, dest_folder, count=count, url=url_param, player=player
+        )
+    else:  # "document", "dataset", "installer", "code", "file"
+        success, result_text, downloaded_file = _download_web_file(
+            clean_target, dest_folder, category=category, player=player
         )
 
     if success and open_in_explorer and downloaded_file:
