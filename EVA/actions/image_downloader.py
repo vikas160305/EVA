@@ -195,7 +195,11 @@ def image_downloader(parameters: dict, player=None) -> str:
     destination_value = str(parameters.get("destination") or "Pictures/JARVIS Downloads").strip()
     destination = Path(destination_value).expanduser()
     if not destination.is_absolute():
-        destination = Path.home() / destination
+        userprofile = os.environ.get("USERPROFILE")
+        if userprofile and destination_value.startswith("Pictures") and (Path(userprofile) / "OneDrive" / "Pictures").exists():
+            destination = Path(userprofile) / "OneDrive" / destination_value
+        else:
+            destination = Path.home() / destination
     try:
         destination.mkdir(parents=True, exist_ok=True)
         candidates, used_source = _search_candidates(query, str(parameters.get("source", "auto")), parameters.get("url"))

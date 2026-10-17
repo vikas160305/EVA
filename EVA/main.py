@@ -62,6 +62,7 @@ from actions.code_helper       import code_helper
 from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.image_downloader import image_downloader
+from actions.media_downloader  import media_downloader
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
@@ -159,6 +160,46 @@ TOOL_DECLARATIONS = [
             },
             "required": ["query"],
         },
+    },
+    {
+        "name": "media_downloader",
+        "description": (
+            "Universal downloader for songs (MP3), music, audio, images, videos (MP4), documents, or files from Google, Chrome, YouTube, or the web. "
+            "Use whenever the user asks to download, save, or fetch any song, music track, audio, image, photo, wallpaper, "
+            "video, or file/document from Google, Chrome, or the internet, and save or view it in File Explorer. "
+            "Supports downloading directly from the active Chrome tab or via accurate web search. "
+            "Automatically opens and reveals the downloaded file in File Explorer."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Song name, image description, search query, or file URL to download (e.g. 'Believer Imagine Dragons', 'iron man wallpaper 4k', 'python cheatsheet pdf')"
+                },
+                "category": {
+                    "type": "STRING",
+                    "description": "song | image | video | file | auto (default: auto)"
+                },
+                "count": {
+                    "type": "INTEGER",
+                    "description": "Number of items to download (for images, default: 3)"
+                },
+                "source": {
+                    "type": "STRING",
+                    "description": "auto | google | youtube | chrome (use chrome when user asks to download from current Chrome browser tab)"
+                },
+                "url": {
+                    "type": "STRING",
+                    "description": "Direct webpage or media URL if provided"
+                },
+                "open_in_explorer": {
+                    "type": "BOOLEAN",
+                    "description": "Open and highlight the downloaded file in File Explorer (default: true)"
+                }
+            },
+            "required": ["query"]
+        }
     },
     {
         "name": "open_app",
@@ -970,6 +1011,13 @@ class JarvisLive:
             elif name == "install_app":
                 r = await loop.run_in_executor(None, lambda: install_app(parameters=args, player=self.ui, speak=self.speak))
                 result = r or f"Installed {args.get('app_name')}."
+
+            elif name in ("media_downloader", "image_downloader"):
+                r = await loop.run_in_executor(
+                    None,
+                    lambda: media_downloader(parameters=args, player=self.ui, speak=self.speak)
+                )
+                result = r or "Download complete."
 
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
