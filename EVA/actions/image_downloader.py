@@ -197,9 +197,9 @@ def image_downloader(parameters: dict, player=None) -> str:
     if not query:
         return "Please specify what images to search for."
     try:
-        count = max(1, min(20, int(parameters.get("count", 5))))
+        count = max(1, min(20, int(parameters.get("count", 1))))
     except (TypeError, ValueError):
-        count = 5
+        count = 1
     destination_value = str(parameters.get("destination") or "Pictures/JARVIS Downloads").strip()
     destination = Path(destination_value).expanduser()
     if not destination.is_absolute():

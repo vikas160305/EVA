@@ -227,3 +227,37 @@ def test_tool_declarations_media_downloader():
     assert "source" in md_tool["parameters"]["properties"]
     assert "open_in_explorer" in md_tool["parameters"]["properties"]
 
+
+def test_media_downloader_image_count_default_is_one():
+    with patch("actions.media_downloader._download_images") as mock_dl_images, \
+         patch("actions.media_downloader._reveal_in_explorer"):
+        mock_dl_images.return_value = (True, "Downloaded 1 image(s)", Path("test.jpg"))
+
+        media_downloader({"query": "download image of sunset"})
+        assert mock_dl_images.called
+        # Check that count passed to _download_images is 1
+        _, kwargs = mock_dl_images.call_args
+        assert kwargs.get("count") == 1
+
+
+def test_media_downloader_image_count_explicit():
+    with patch("actions.media_downloader._download_images") as mock_dl_images, \
+         patch("actions.media_downloader._reveal_in_explorer"):
+        mock_dl_images.return_value = (True, "Downloaded 4 image(s)", Path("test.jpg"))
+
+        media_downloader({"query": "download sunset wallpaper", "count": 4})
+        assert mock_dl_images.called
+        _, kwargs = mock_dl_images.call_args
+        assert kwargs.get("count") == 4
+
+
+def test_media_downloader_image_count_extracted_from_query():
+    with patch("actions.media_downloader._download_images") as mock_dl_images, \
+         patch("actions.media_downloader._reveal_in_explorer"):
+        mock_dl_images.return_value = (True, "Downloaded 5 image(s)", Path("test.jpg"))
+
+        media_downloader({"query": "download 5 images of cute puppies"})
+        assert mock_dl_images.called
+        _, kwargs = mock_dl_images.call_args
+        assert kwargs.get("count") == 5
+

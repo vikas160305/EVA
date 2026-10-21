@@ -102,12 +102,12 @@ RECEIVE_SAMPLE_RATE = 24000
 # comfortably above the overhead floor for sounddevice on Windows.  The former
 # 1024-frame packet held microphone audio for 64 ms before it could be sent.
 CHUNK_SIZE          = 320
-OUTPUT_CHUNK_SIZE   = 480  # 20 ms at 24 kHz; keep device writes responsive
+OUTPUT_CHUNK_SIZE   = 960  # 40 ms at 24 kHz; smooth Windows audio device writes
 # Expand playback queue buffer to 500 slices (10 seconds) to absorb Gemini Live network
 # audio bursts without dropping PCM chunks, preventing clipped/fast/rushed voice output.
 PLAYBACK_QUEUE_SIZE = 500
-BARGE_IN_RMS        = 1400 # conservative PCM16 speech threshold
-BARGE_IN_CHUNKS     = 3    # 60 ms confirmation avoids reacting to one noise spike
+BARGE_IN_RMS        = 4800 # High threshold so speaker audio echoing into mic does not falsely self-interrupt
+BARGE_IN_CHUNKS     = 8    # 160 ms confirmation avoids reacting to speaker echo or transient noise
 
 # Fast conversational turn detection.  A half-second pause still permits
 # natural speech, but removes the long default "is the user finished?" wait.
@@ -183,7 +183,7 @@ TOOL_DECLARATIONS = [
                 },
                 "count": {
                     "type": "INTEGER",
-                    "description": "Number of items to download (for images, default: 3)"
+                    "description": "Number of items to download (for images, default: 1 unless user explicitly specifies a number)"
                 },
                 "source": {
                     "type": "STRING",
@@ -287,15 +287,16 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "send_message",
-        "description": "Sends a text message via WhatsApp, Telegram, or other messaging platform.",
+        "description": "Sends messages, files, images, or videos via WhatsApp, Telegram, or other messaging platform. Supports sending documents, photos, and videos to WhatsApp contacts.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "receiver":     {"type": "STRING", "description": "Recipient contact name"},
-                "message_text": {"type": "STRING", "description": "The message to send"},
+                "receiver":     {"type": "STRING", "description": "Recipient contact name or phone number"},
+                "message_text": {"type": "STRING", "description": "Message text or caption (optional if sending a file)"},
+                "file_path":    {"type": "STRING", "description": "Path or filename of the file, image, or video to send (e.g. 'invoice.pdf', 'basket_of_apples.jpg', 'video.mp4', or recent file)"},
                 "platform":     {"type": "STRING", "description": "Platform: WhatsApp, Telegram, etc."}
             },
-            "required": ["receiver", "message_text", "platform"]
+            "required": ["receiver"]
         }
     },
     {
@@ -867,7 +868,11 @@ class JarvisLive:
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
+            if self._is_speaking == value:
+                return
             self._is_speaking = value
+            if value:
+                self._speech_start_time = time.monotonic()
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
@@ -1231,6 +1236,12 @@ class JarvisLive:
             # Do not stream speaker echo to Gemini. Once real speech is sustained,
             # flush the short ring so server VAD receives the onset as well.
             speech_candidate.append(data)
+            # Ignore barge-in during the first 0.8s of speaking (grace period against speaker echo onset)
+            if time.monotonic() - getattr(self, "_speech_start_time", 0.0) < 0.8:
+                speech_candidate.clear()
+                speech_run = 0
+                return
+
             audio_level = float((indata.astype("int32") ** 2).mean() ** 0.5)
             speech_run = speech_run + 1 if audio_level >= BARGE_IN_RMS else 0
             if speech_run >= BARGE_IN_CHUNKS:
@@ -1293,7 +1304,7 @@ class JarvisLive:
                             # make the voice sound clipped or too hurried when Gemini
                             # sends a dense audio packet.
                             _audio_data = response.data
-                            _SLICE = 480  # 24000 Hz × 2 bytes/sample × 0.01 s
+                            _SLICE = 960  # 24000 Hz × 2 bytes/sample × 0.02 s (20 ms / 480 samples)
                             for _i in range(0, len(_audio_data), _SLICE):
                                 if self._cancel_event.is_set():
                                     break
@@ -1422,7 +1433,7 @@ class JarvisLive:
             samplerate=RECEIVE_SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
-            blocksize=OUTPUT_CHUNK_SIZE,
+            blocksize=0,  # 0 lets OS/sounddevice use native host buffer to avoid underflow glitches
         )
         stream.start()
 
@@ -1443,6 +1454,7 @@ class JarvisLive:
                         self._turn_done_event.clear()
                     continue
 
+                was_speaking = self._is_speaking
                 self.set_speaking(True)
 
                 # Batch all immediately-available chunks into one write to reduce
@@ -1450,7 +1462,16 @@ class JarvisLive:
                 # Keep only a tiny output buffer.  Large batches make a quick
                 # response sound delayed and make interruption feel sluggish.
                 batch = bytearray(chunk)
-                while len(batch) < 1920:   # 1920 bytes = 40 ms at 24 kHz / 16-bit mono
+                # When starting from silence, pre-buffer ~100 ms of audio (4800 bytes)
+                # to absorb network packet arrival jitter and stop voice from breaking.
+                if not was_speaking:
+                    prebuffer_deadline = time.monotonic() + 0.10
+                    while len(batch) < 4800 and time.monotonic() < prebuffer_deadline:
+                        try:
+                            batch.extend(self.audio_in_queue.get_nowait())
+                        except asyncio.QueueEmpty:
+                            await asyncio.sleep(0.01)
+                while len(batch) < 3840:   # Batch up to 80 ms at 24 kHz / 16-bit mono
                     try:
                         batch.extend(self.audio_in_queue.get_nowait())
                     except asyncio.QueueEmpty:

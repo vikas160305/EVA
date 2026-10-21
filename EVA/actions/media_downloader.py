@@ -347,7 +347,7 @@ def _download_video(
 def _download_images(
     query: str,
     dest_folder: Path,
-    count: int = 3,
+    count: int = 1,
     url: Optional[str] = None,
     player=None
 ) -> Tuple[bool, str, Optional[Path]]:
@@ -755,7 +755,7 @@ def media_downloader(
     Parameters:
         query (str): Search term, song title, image topic, document query, or URL.
         category (str): 'song' | 'image' | 'video' | 'document' | 'dataset' | 'installer' | 'code' | 'file' | 'auto' (default: 'auto').
-        count (int): Number of items (for images, default 3).
+        count (int): Number of items (for images, default 1 unless specified).
         source (str): 'auto' | 'google' | 'youtube' | 'chrome' (default: 'auto').
         url (str): Optional direct URL to download.
         open_in_explorer (bool): Open and highlight the file in File Explorer (default: True).
@@ -767,10 +767,30 @@ def media_downloader(
     url_param = params.get("url")
     open_in_explorer = params.get("open_in_explorer", True)
 
-    try:
-        count = max(1, min(10, int(params.get("count", 3))))
-    except (TypeError, ValueError):
-        count = 3
+    raw_count = params.get("count")
+    if raw_count is not None and str(raw_count).strip():
+        try:
+            count = max(1, min(20, int(raw_count)))
+        except (TypeError, ValueError):
+            count = 1
+    else:
+        m_num = re.search(r'\b(\d+)\s*(?:images?|photos?|pictures?|wallpapers?)', raw_query, flags=re.IGNORECASE)
+        if m_num:
+            try:
+                count = max(1, min(20, int(m_num.group(1))))
+            except (TypeError, ValueError):
+                count = 1
+        else:
+            word_map = {
+                "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
+            }
+            m_word = re.search(
+                r'\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:images?|photos?|pictures?|wallpapers?)',
+                raw_query,
+                flags=re.IGNORECASE
+            )
+            count = word_map.get(m_word.group(1).lower(), 1) if m_word else 1
 
     # Check for active Chrome tab only if user asks for current page/tab or provided no query
     wants_current_tab = any(p in raw_query.lower() for p in ("this page", "this tab", "current tab", "current page", "from the tab", "this site", "from here"))
