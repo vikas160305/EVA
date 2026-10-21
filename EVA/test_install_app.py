@@ -108,3 +108,37 @@ def test_tool_declarations_has_install_app():
     tool = next(t for t in TOOL_DECLARATIONS if t["name"] == "install_app")
     assert "app_name" in tool["parameters"]["properties"]
     assert "app_name" in tool["parameters"]["required"]
+
+
+def test_popular_apps_catalog():
+    from actions.install_app import _POPULAR_APPS
+    assert "vlc" in _POPULAR_APPS
+    assert _POPULAR_APPS["vlc"]["id"] == "VideoLAN.VLC"
+    assert "whatsapp" in _POPULAR_APPS
+    assert "chrome" in _POPULAR_APPS
+    assert "spotify" in _POPULAR_APPS
+
+
+def test_fast_check_installed_local():
+    from actions.install_app import _fast_check_installed_local
+    # Non-existent app should return False quickly
+    is_inst, name = _fast_check_installed_local("definitely_not_a_real_app_xyz_123")
+    assert is_inst is False
+    assert name == ""
+
+
+def test_silent_flags_in_winget_command():
+    from actions.install_app import install_app
+    with patch("actions.install_app._check_already_installed_winget", return_value=(False, "")), \
+         patch("actions.install_app._stream_winget_install") as mock_stream:
+        mock_stream.return_value = (0, "Successfully installed VLC media player")
+        res = install_app(parameters={"app_name": "VLC", "launch_after": False})
+        assert "Successfully installed" in res
+        assert mock_stream.called
+        cmd = mock_stream.call_args[0][0]
+        assert "--silent" in cmd
+        assert "--accept-package-agreements" in cmd
+        assert "--accept-source-agreements" in cmd
+        assert "--disable-interactivity" in cmd
+        assert "--force" in cmd
+

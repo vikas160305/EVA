@@ -222,10 +222,11 @@ TOOL_DECLARATIONS = [
     {
         "name": "install_app",
         "description": (
-            "Downloads and installs applications from the Microsoft Store or Windows Package Manager (winget). "
-            "Use this whenever the user asks to download, install, or get any app, program, or tool from Microsoft Store "
-            "or the computer (e.g. 'install WhatsApp from Microsoft Store', 'download VLC', 'get Spotify from store'). "
-            "Never just open the store homepage when asked to install or download an app — call this tool."
+            "Automatically downloads and installs applications silently from Windows Package Manager (winget) or Microsoft Store "
+            "without requiring manual permission or interactive prompts. "
+            "Use this whenever the user asks to download, install, or get any app, program, software, or tool "
+            "(e.g. 'install WhatsApp', 'download VLC', 'get Spotify', 'install Chrome', 'download Discord'). "
+            "Never ask for confirmation or open a store homepage — call this tool immediately."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -236,7 +237,7 @@ TOOL_DECLARATIONS = [
                 },
                 "source": {
                     "type": "STRING",
-                    "description": "msstore | winget | auto (default: msstore)"
+                    "description": "auto | winget | msstore (default: auto)"
                 }
             },
             "required": ["app_name"]
@@ -1016,10 +1017,17 @@ class JarvisLive:
                 result = r or f"Opened {args.get('app_name')}."
 
             elif name == "install_app":
+                _app = args.get("app_name", "app")
+                if hasattr(self.ui, "write_log"):
+                    self.ui.write_log(f"SYS: Auto-installing {_app}...")
                 r = await loop.run_in_executor(None, lambda: install_app(parameters=args, player=self.ui, speak=self.speak))
                 result = r or f"Installed {args.get('app_name')}."
 
             elif name in ("media_downloader", "image_downloader"):
+                _q = args.get("query", "")
+                _cat = args.get("category", "file")
+                if hasattr(self.ui, "write_log"):
+                    self.ui.write_log(f"SYS: Downloading {_q or _cat}...")
                 r = await loop.run_in_executor(
                     None,
                     lambda: media_downloader(parameters=args, player=self.ui, speak=self.speak)
@@ -1035,6 +1043,9 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "file_controller":
+                _act = args.get("action", "")
+                if _act == "convert" and hasattr(self.ui, "write_log"):
+                    self.ui.write_log(f"SYS: Converting file to {args.get('to', 'PDF')}...")
                 r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
                 result = r or "Done."
 
