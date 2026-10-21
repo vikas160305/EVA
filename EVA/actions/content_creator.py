@@ -109,14 +109,25 @@ def _generate(prompt: str) -> str:
 
 
 def _json_plan(request: str, format_name: str, research: str, count: int) -> dict:
-    prompt = f'''Create a factual, well-structured plan for a {format_name}.
+    prompt = f'''You are an expert content strategist and professional author. Create an authoritative, factual, well-structured plan for a {format_name}.
 User request: {request}
 Requested length/count: {count}
 Research notes (may be empty): {research}
+
+Guidelines:
+1. Deliver comprehensive, high-quality, professional content with high factual accuracy.
+2. For presentations (PPTX): Create exactly {count} content sections.
+   - Each section needs 3 to 5 detailed, insightful bullet points containing concrete facts, data, explanations, and actionable takeaways (avoid vague one-liners).
+   - "body": A concise 1-2 sentence executive summary or presenter note for the slide.
+   - "image_query": A specific, descriptive 3-5 word image search query for high-res web photos (e.g. "James Webb Space Telescope nebula", "modern server room datacenter", "renewable solar energy farm").
+3. For documents (DOCX, PDF): Create 4 to 8 rich, well-organized sections.
+   - "body": Substantive, thorough multi-sentence paragraphs (100-250 words per section) explaining core concepts, context, and findings.
+   - "points": Bulleted key takeaways or specific metrics.
+   - "image_query": A specific, descriptive image search query for section illustration.
+
 Return ONLY valid JSON with this exact shape:
 {{"title":"...","subtitle":"...","sections":[{{"title":"...","points":["..."],"body":"...","image_query":"..."}}],"sources":["..."]}}
-Create exactly {count} content sections for a presentation; for a document create 4-8 useful sections.
-Each presentation section needs 3-5 concise points. Do not invent citations. Include source URLs only when present in research.'''
+Do not invent citations. Include source URLs only when present in research.'''
     raw = _generate(prompt)
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.I)
     try:
@@ -140,23 +151,40 @@ Each presentation section needs 3-5 concise points. Do not invent citations. Inc
 
 
 def _fit_sections(plan: dict, count: int) -> list[dict]:
-    """Guarantee a requested slide count even if an AI response is incomplete."""
+    """Guarantee a requested slide count with diverse, progressive sequential topics."""
     sections = [item for item in plan.get("sections", []) if isinstance(item, dict)]
     if not sections:
-        sections = [{"title": "Overview", "points": [plan.get("title", "Overview")], "body": "", "image_query": ""}]
+        sections = [{"title": "Overview", "points": [plan.get("title", "Overview")], "body": "", "image_query": plan.get("title", "")}]
+
+    subtopic_templates = [
+        ("Key Architecture & Foundations", "Core architectural pillars and underlying mechanisms.", "architecture system overview"),
+        ("Deep Technical Analysis", "Detailed analysis of core performance characteristics and metrics.", "data analytics dashboard chart"),
+        ("Real-World Use Cases & Applications", "Practical implementations, industry workflows, and case studies.", "technology workflow application"),
+        ("Key Challenges & Mitigations", "Operational obstacles, edge cases, and effective mitigation strategies.", "solution engineering puzzle"),
+        ("Strategic Recommendations", "Actionable best practices and recommendations for optimal outcomes.", "strategy checklist goal"),
+        ("Future Roadmap & Innovations", "Emerging innovations, scalability roadmap, and upcoming horizons.", "future technology innovation"),
+        ("Summary & Key Takeaways", "Comprehensive synthesis of critical insights and conclusion.", "summary conclusion milestone"),
+    ]
+    template_idx = 0
+    main_topic = plan.get("title", "Topic")
     while len(sections) < count:
-        source = sections[-1]
+        title_tmpl, body_tmpl, query_tmpl = subtopic_templates[template_idx % len(subtopic_templates)]
+        template_idx += 1
         sections.append({
-            "title": f"{source.get('title', 'Topic')} — continued",
-            "points": list(source.get("points", [])),
-            "body": source.get("body", ""),
-            "image_query": source.get("image_query", ""),
+            "title": f"{title_tmpl}",
+            "points": [
+                f"In-depth analysis of {main_topic.lower()} with respect to {title_tmpl.lower()}.",
+                f"Identified critical success factors and strategic considerations for execution.",
+                f"Actionable methodology aligned with current industry best practices."
+            ],
+            "body": f"{body_tmpl} Focuses on high-impact dimensions of {main_topic}.",
+            "image_query": f"{main_topic} {query_tmpl}",
         })
     return sections[:count]
 
 
 def _wikimedia_image(query: str, folder: Path) -> Path | None:
-    """Fetch one openly hosted thumbnail for a slide; failure is non-fatal."""
+    """Fetch one openly hosted thumbnail for a slide from Wikimedia Commons."""
     try:
         response = requests.get(
             "https://commons.wikimedia.org/w/api.php",
@@ -177,78 +205,474 @@ def _wikimedia_image(query: str, folder: Path) -> Path | None:
         return None
 
 
-def _create_docx(plan: dict, output: Path) -> None:
+def _fetch_relevant_image(query: str, folder: Path, used_urls: set[str] | None = None) -> Path | None:
+    """Search the internet for high-quality, relevant images using DuckDuckGo, Bing, Google, and Wikimedia.
+    Validates dimensions and converts to standard RGB mode for perfect embedding."""
+    if not query or not query.strip():
+        return None
+    cleaned_query = re.sub(r"[^\w\s-]", " ", query).strip()
+    if not cleaned_query:
+        return None
+
+    seen = used_urls if used_urls is not None else set()
+    candidate_urls: list[str] = []
+
+    # 1. DuckDuckGo Image Search
+    try:
+        from actions.image_downloader import _duckduckgo_images
+        candidate_urls.extend(_duckduckgo_images(cleaned_query))
+    except Exception:
+        pass
+
+    # 2. Bing Image Search
+    if len(candidate_urls) < 6:
+        try:
+            from actions.image_downloader import _bing_images
+            candidate_urls.extend(_bing_images(cleaned_query))
+        except Exception:
+            pass
+
+    # 3. Google Image Search
+    if len(candidate_urls) < 6:
+        try:
+            from actions.image_downloader import _google_images
+            candidate_urls.extend(_google_images(cleaned_query))
+        except Exception:
+            pass
+
+    # 4. Wikimedia Commons fallback
+    if len(candidate_urls) < 3:
+        try:
+            resp = requests.get(
+                "https://commons.wikimedia.org/w/api.php",
+                params={"action": "query", "generator": "search", "gsrsearch": cleaned_query,
+                        "gsrnamespace": 6, "gsrlimit": 3, "prop": "imageinfo",
+                        "iiprop": "url", "iiurlwidth": 1200, "format": "json"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                timeout=8,
+            )
+            pages = resp.json().get("query", {}).get("pages", {}).values()
+            for p in pages:
+                info = p.get("imageinfo", [{}])[0]
+                u = info.get("thumburl") or info.get("url")
+                if u:
+                    candidate_urls.append(u)
+        except Exception:
+            pass
+
+    from io import BytesIO
+    from PIL import Image
+
+    for url in candidate_urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            res = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                timeout=(5, 12),
+            )
+            if res.status_code != 200 or len(res.content) < 5000:
+                continue
+            img = Image.open(BytesIO(res.content))
+            width, height = img.size
+            if width < 250 or height < 180:
+                continue
+            if img.format not in ("JPEG", "PNG", "WEBP", "BMP"):
+                continue
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+
+            slug = _safe_name(cleaned_query, "visual")[:25]
+            out_file = folder / f"img_{len(seen)}_{slug}.jpg"
+            img.save(out_file, "JPEG", quality=90)
+            if out_file.exists() and out_file.stat().st_size > 0:
+                return out_file
+        except Exception:
+            continue
+
+    # Final fallback to standard wikimedia
+    return _wikimedia_image(cleaned_query, folder)
+
+
+def _create_docx(plan: dict, output: Path, include_images: bool = False) -> None:
     from docx import Document
-    from docx.shared import Inches, Pt
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import parse_xml
+    from PIL import Image
+
     doc = Document()
-    section = doc.sections[0]
-    section.top_margin = section.bottom_margin = Inches(0.8)
+    for s in doc.sections:
+        s.top_margin = Inches(1.0)
+        s.bottom_margin = Inches(1.0)
+        s.left_margin = Inches(1.0)
+        s.right_margin = Inches(1.0)
+
     style = doc.styles["Normal"]
-    style.font.name, style.font.size = "Aptos", Pt(11)
-    doc.add_heading(plan["title"], 0)
-    if plan.get("subtitle"):
-        doc.add_paragraph(plan["subtitle"])
-    for item in plan["sections"]:
-        doc.add_heading(item.get("title", "Section"), level=1)
-        if item.get("body"):
-            doc.add_paragraph(item["body"])
-        for point in item.get("points", []):
-            doc.add_paragraph(point, style="List Bullet")
-    if plan.get("sources"):
-        doc.add_heading("Sources", level=1)
-        for source in plan["sources"]:
-            doc.add_paragraph(source, style="List Bullet")
+    style.font.name = "Calibri"
+    style.font.size = Pt(11)
+    style.font.color.rgb = RGBColor(30, 41, 59)
+
+    # Document Title
+    p_title = doc.add_paragraph()
+    p_title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run_title = p_title.add_run(plan.get("title", "Document"))
+    run_title.font.name = "Calibri"
+    run_title.font.size = Pt(26)
+    run_title.font.bold = True
+    run_title.font.color.rgb = RGBColor(30, 58, 138)  # Deep Navy #1E3A8A
+    p_title.paragraph_format.space_after = Pt(4)
+
+    # Subtitle / Metadata
+    subtitle = plan.get("subtitle") or "Prepared by EVA AI"
+    p_sub = doc.add_paragraph()
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run_sub = p_sub.add_run(f"{subtitle}  |  {time.strftime('%B %d, %Y')}")
+    run_sub.font.size = Pt(10)
+    run_sub.font.italic = True
+    run_sub.font.color.rgb = RGBColor(100, 116, 139)
+    p_sub.paragraph_format.space_after = Pt(14)
+
+    # Divider line
+    p_div = doc.add_paragraph()
+    p_div.paragraph_format.space_after = Pt(14)
+    p_div_border = parse_xml(r'<w:pBdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                             r'<w:bottom w:val="single" w:sz="12" w:space="1" w:color="CBD5E1"/>'
+                             r'</w:pBdr>')
+    p_div._p.get_or_add_pPr().append(p_div_border)
+
+    with tempfile.TemporaryDirectory() as temp:
+        image_dir = Path(temp)
+        used_urls: set[str] = set()
+
+        for item in plan.get("sections", []):
+            h = doc.add_heading(item.get("title", "Section"), level=1)
+            h.paragraph_format.space_before = Pt(14)
+            h.paragraph_format.space_after = Pt(6)
+            for r in h.runs:
+                r.font.name = "Calibri"
+                r.font.color.rgb = RGBColor(30, 58, 138)
+                r.font.size = Pt(16)
+
+            body = (item.get("body") or "").strip()
+            if body:
+                p_body = doc.add_paragraph(body)
+                p_body.paragraph_format.space_after = Pt(8)
+                p_body.paragraph_format.line_spacing = 1.15
+
+            for point in item.get("points", []):
+                p_pt = doc.add_paragraph(str(point), style="List Bullet")
+                p_pt.paragraph_format.space_after = Pt(4)
+
+            # Insert relevant web image if requested
+            if include_images:
+                query = item.get("image_query") or item.get("title", "")
+                img_path = _fetch_relevant_image(query, image_dir, used_urls)
+                if img_path and img_path.exists():
+                    try:
+                        p_img = doc.add_paragraph()
+                        p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p_img.paragraph_format.space_before = Pt(8)
+                        p_img.paragraph_format.space_after = Pt(4)
+                        doc.add_picture(str(img_path), width=Inches(5.0))
+
+                        p_cap = doc.add_paragraph()
+                        p_cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p_cap.paragraph_format.space_after = Pt(14)
+                        r_cap = p_cap.add_run(f"Figure: {item.get('title', 'Illustration')}")
+                        r_cap.font.size = Pt(9)
+                        r_cap.font.italic = True
+                        r_cap.font.color.rgb = RGBColor(100, 116, 139)
+                    except Exception:
+                        pass
+
+        if plan.get("sources"):
+            h_src = doc.add_heading("References & Sources", level=1)
+            h_src.paragraph_format.space_before = Pt(18)
+            h_src.paragraph_format.space_after = Pt(6)
+            for s in plan["sources"]:
+                p_s = doc.add_paragraph(str(s), style="List Bullet")
+                p_s.paragraph_format.space_after = Pt(3)
+
     doc.save(output)
 
 
-def _create_pdf(plan: dict, output: Path) -> None:
+def _create_pdf(plan: dict, output: Path, include_images: bool = False) -> None:
     from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem, HRFlowable, Image as RLImage
+    from PIL import Image as PILImage
+
     styles = getSampleStyleSheet()
-    story = [Paragraph(plan["title"], styles["Title"]), Spacer(1, 0.2 * inch)]
-    for item in plan["sections"]:
-        story += [Paragraph(item.get("title", "Section"), styles["Heading1"])]
-        if item.get("body"):
-            story += [Paragraph(item["body"], styles["BodyText"])]
-        story += [ListFlowable([ListItem(Paragraph(p, styles["BodyText"])) for p in item.get("points", [])])]
-        story += [Spacer(1, 0.12 * inch)]
-    if plan.get("sources"):
-        story += [Paragraph("Sources", styles["Heading1"])]
-        story += [ListFlowable([ListItem(Paragraph(s, styles["BodyText"])) for s in plan["sources"]])]
-    SimpleDocTemplate(str(output), pagesize=letter, rightMargin=54, leftMargin=54).build(story)
+
+    title_style = ParagraphStyle(
+        "DocTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=24,
+        leading=28,
+        textColor=colors.HexColor("#1E3A8A"),
+        spaceAfter=6,
+    )
+    sub_style = ParagraphStyle(
+        "DocSub",
+        parent=styles["Normal"],
+        fontName="Helvetica-Oblique",
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor("#64748B"),
+        spaceAfter=12,
+    )
+    h1_style = ParagraphStyle(
+        "DocH1",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=15,
+        leading=19,
+        textColor=colors.HexColor("#1E3A8A"),
+        spaceBefore=14,
+        spaceAfter=6,
+        keepWithNext=True,
+    )
+    body_style = ParagraphStyle(
+        "DocBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=10.5,
+        leading=15,
+        textColor=colors.HexColor("#1E293B"),
+        spaceAfter=8,
+    )
+    bullet_style = ParagraphStyle(
+        "DocBullet",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor("#334155"),
+        spaceAfter=4,
+    )
+    caption_style = ParagraphStyle(
+        "DocCaption",
+        parent=styles["Normal"],
+        fontName="Helvetica-Oblique",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#64748B"),
+        alignment=1,  # Center
+        spaceAfter=12,
+    )
+
+    story = [
+        Paragraph(plan.get("title", "Document"), title_style),
+        Paragraph(f"{plan.get('subtitle', 'Prepared by EVA AI')}  •  {time.strftime('%B %d, %Y')}", sub_style),
+        HRFlowable(width="100%", thickness=1, color=colors.HexColor("#CBD5E1"), spaceAfter=14),
+    ]
+
+    with tempfile.TemporaryDirectory() as temp:
+        image_dir = Path(temp)
+        used_urls: set[str] = set()
+
+        for item in plan.get("sections", []):
+            story.append(Paragraph(item.get("title", "Section"), h1_style))
+            body = (item.get("body") or "").strip()
+            if body:
+                story.append(Paragraph(body, body_style))
+
+            points = item.get("points", [])
+            if points:
+                items = [ListItem(Paragraph(str(p), bullet_style), leftIndent=15, bulletOffsetY=-1) for p in points]
+                story.append(ListFlowable(items, bulletType="bullet", start="square", leftIndent=10))
+                story.append(Spacer(1, 0.08 * inch))
+
+            if include_images:
+                query = item.get("image_query") or item.get("title", "")
+                img_path = _fetch_relevant_image(query, image_dir, used_urls)
+                if img_path and img_path.exists():
+                    try:
+                        with PILImage.open(img_path) as pim:
+                            pw, ph = pim.size
+                        aspect = pw / max(1, ph)
+                        max_w, max_h = 440, 240
+                        target_w = max_w
+                        target_h = max_w / aspect
+                        if target_h > max_h:
+                            target_h = max_h
+                            target_w = max_h * aspect
+
+                        story.append(Spacer(1, 0.08 * inch))
+                        story.append(RLImage(str(img_path), width=target_w, height=target_h))
+                        story.append(Paragraph(f"Figure: {item.get('title', 'Illustration')}", caption_style))
+                    except Exception:
+                        pass
+
+        if plan.get("sources"):
+            story.append(Paragraph("References & Sources", h1_style))
+            items = [ListItem(Paragraph(str(s), bullet_style), leftIndent=15) for s in plan["sources"]]
+            story.append(ListFlowable(items, bulletType="bullet", leftIndent=10))
+
+    SimpleDocTemplate(str(output), pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54).build(story)
 
 
 def _create_pptx(plan: dict, output: Path, total_slides: int, include_images: bool = False) -> None:
     from pptx import Presentation
     from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    from PIL import Image
+
     prs = Presentation()
     prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
-    title = prs.slides.add_slide(prs.slide_layouts[0])
-    title.shapes.title.text = plan["title"]
-    title.placeholders[1].text = plan.get("subtitle", "Created by JARVIS")
+
+    # Slide 1: Executive Title Slide
+    title_slide = prs.slides.add_slide(prs.slide_layouts[6])
+    bg = title_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), prs.slide_width, prs.slide_height)
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = RGBColor(15, 23, 42)  # #0F172A Slate Navy
+    bg.line.fill.background()
+
+    accent = title_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1.2), Inches(2.2), Inches(1.8), Inches(0.08))
+    accent.fill.solid()
+    accent.fill.fore_color.rgb = RGBColor(37, 99, 235)  # Royal Blue
+    accent.line.fill.background()
+
+    title_box = title_slide.shapes.add_textbox(Inches(1.2), Inches(2.4), Inches(11.0), Inches(2.2))
+    tf = title_box.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = plan.get("title", "Presentation")
+    p.font.size = Pt(38)
+    p.font.bold = True
+    p.font.color.rgb = RGBColor(255, 255, 255)
+
+    sub_box = title_slide.shapes.add_textbox(Inches(1.2), Inches(4.7), Inches(10.5), Inches(1.2))
+    stf = sub_box.text_frame
+    stf.word_wrap = True
+    sp = stf.paragraphs[0]
+    sp.text = plan.get("subtitle") or "Created by EVA AI"
+    sp.font.size = Pt(20)
+    sp.font.color.rgb = RGBColor(203, 213, 225)
+
+    foot_box = title_slide.shapes.add_textbox(Inches(1.2), Inches(6.3), Inches(8.0), Inches(0.5))
+    fp = foot_box.text_frame.paragraphs[0]
+    fp.text = "Generated by EVA AI • Executive Deck"
+    fp.font.size = Pt(11)
+    fp.font.color.rgb = RGBColor(148, 163, 184)
+
     with tempfile.TemporaryDirectory() as temp:
         image_dir = Path(temp)
-        for index, item in enumerate(_fit_sections(plan, max(1, total_slides - 1)), 1):
-            slide = prs.slides.add_slide(prs.slide_layouts[5])
-            heading = slide.shapes.add_textbox(Inches(0.6), Inches(0.35), Inches(12), Inches(0.7))
-            heading.text_frame.text = item.get("title", f"Slide {index}")
-            heading.text_frame.paragraphs[0].font.size = Pt(32)
-            box = slide.shapes.add_textbox(Inches(0.75), Inches(1.35), Inches(6.0), Inches(5.5))
+        used_urls: set[str] = set()
+        sections = _fit_sections(plan, max(1, total_slides - 1))
+
+        for index, item in enumerate(sections, 1):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+
+            # Top accent bar
+            accent_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.8), Inches(0.5), Inches(1.5), Inches(0.06))
+            accent_bar.fill.solid()
+            accent_bar.fill.fore_color.rgb = RGBColor(37, 99, 235)
+            accent_bar.line.fill.background()
+
+            # Slide Title
+            title_box = slide.shapes.add_textbox(Inches(0.8), Inches(0.65), Inches(10.0), Inches(0.65))
+            ttf = title_box.text_frame
+            ttf.word_wrap = True
+            tp = ttf.paragraphs[0]
+            tp.text = item.get("title", f"Section {index}")
+            tp.font.size = Pt(26)
+            tp.font.bold = True
+            tp.font.color.rgb = RGBColor(15, 23, 42)
+
+            # Slide index badge
+            cat_box = slide.shapes.add_textbox(Inches(10.0), Inches(0.5), Inches(2.5), Inches(0.4))
+            cp = cat_box.text_frame.paragraphs[0]
+            cp.text = f"{index:02d} / {len(sections):02d}"
+            cp.alignment = PP_ALIGN.RIGHT
+            cp.font.size = Pt(12)
+            cp.font.color.rgb = RGBColor(148, 163, 184)
+
+            # Check if image is requested and fetch
+            image_path = None
+            if include_images:
+                query = item.get("image_query") or item.get("title", "")
+                image_path = _fetch_relevant_image(query, image_dir, used_urls)
+
+            # Layout logic: Two-column with Image vs Full-Width
+            if image_path and image_path.exists():
+                text_left = Inches(0.8)
+                text_top = Inches(1.45)
+                text_width = Inches(6.8)
+                text_height = Inches(5.4)
+
+                box_left = Inches(7.9)
+                box_top = Inches(1.45)
+                box_width = Inches(4.6)
+                box_height = Inches(5.2)
+
+                try:
+                    with Image.open(image_path) as im:
+                        im_w, im_h = im.size
+                    aspect = im_w / max(1, im_h)
+                    target_w = box_width
+                    target_h = box_width / aspect
+                    if target_h > box_height:
+                        target_h = box_height
+                        target_w = box_height * aspect
+
+                    img_x = box_left + (box_width - target_w) / 2
+                    img_y = box_top + (box_height - target_h) / 2
+
+                    card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, box_left, box_top, box_width, box_height)
+                    card.fill.solid()
+                    card.fill.fore_color.rgb = RGBColor(248, 250, 252)
+                    card.line.color.rgb = RGBColor(226, 232, 240)
+
+                    slide.shapes.add_picture(str(image_path), img_x, img_y, width=target_w, height=target_h)
+                except Exception:
+                    text_width = Inches(11.7)
+            else:
+                text_left = Inches(0.8)
+                text_top = Inches(1.45)
+                text_width = Inches(11.7)
+                text_height = Inches(5.4)
+
+            # Content Text Box
+            box = slide.shapes.add_textbox(text_left, text_top, text_width, text_height)
             frame = box.text_frame
             frame.word_wrap = True
-            for point_index, point in enumerate(item.get("points", [])[:5]):
-                para = frame.paragraphs[0] if point_index == 0 else frame.add_paragraph()
-                para.text, para.level, para.font.size = str(point), 0, Pt(18)
-            if include_images:
-                image = _wikimedia_image(item.get("image_query") or item.get("title", ""), image_dir)
-                if image:
-                    try:
-                        slide.shapes.add_picture(str(image), Inches(7.1), Inches(1.35), width=Inches(5.55), height=Inches(4.85))
-                    except Exception:
-                        pass
+
+            first_p = True
+            body_text = (item.get("body") or "").strip()
+            if body_text and len(body_text) > 10:
+                p = frame.paragraphs[0]
+                first_p = False
+                p.text = body_text
+                p.font.size = Pt(14)
+                p.font.italic = True
+                p.font.color.rgb = RGBColor(71, 85, 105)
+                p.space_after = Pt(14)
+
+            points = item.get("points", [])
+            for point in points[:5]:
+                point_text = str(point).strip()
+                if not point_text:
+                    continue
+                if first_p:
+                    p = frame.paragraphs[0]
+                    first_p = False
+                else:
+                    p = frame.add_paragraph()
+                p.text = f"•  {point_text}"
+                p.level = 0
+                p.font.size = Pt(16 if (image_path and image_path.exists()) else 17)
+                p.font.color.rgb = RGBColor(30, 41, 59)
+                p.space_after = Pt(12)
+
     prs.save(output)
 
 
@@ -349,17 +773,17 @@ def content_creator(parameters: dict, response=None, player=None, session_memory
         else:
             research = _research(request) if params.get("research", True) else ""
             plan = _json_plan(request, format_name, research, max(1, count - 1) if format_name == "pptx" else count)
+            req_words = ("image", "images", "photo", "photos", "picture", "pictures", "visual", "visuals", "diagram", "diagrams", "illustration", "illustrations", "figure", "figures")
+            include_images = bool(params.get("images") or params.get("include_images")) or any(w in req_low for w in req_words)
             if format_name == "docx":
-                _create_docx(plan, tmp)
+                _create_docx(plan, tmp, include_images=include_images)
                 service._validate_artifact(tmp, "docx")
                 os.replace(tmp, output)
             elif format_name == "pdf":
-                _create_pdf(plan, tmp)
+                _create_pdf(plan, tmp, include_images=include_images)
                 service._validate_artifact(tmp, "pdf")
                 os.replace(tmp, output)
             elif format_name == "pptx":
-                request_lower = request.casefold()
-                include_images = any(word in request_lower for word in ("image", "images", "photo", "photos", "picture", "pictures", "visual"))
                 _create_pptx(plan, tmp, count, include_images=include_images)
                 service._validate_artifact(tmp, "pptx")
                 os.replace(tmp, output)
@@ -369,6 +793,14 @@ def content_creator(parameters: dict, response=None, player=None, session_memory
                 os.replace(tmp, output)
         if not output.exists() or output.stat().st_size == 0:
             raise RuntimeError("The output file was not written correctly.")
+        
+        # Auto-reveal created file in File Explorer
+        try:
+            from actions.media_downloader import _reveal_in_explorer
+            _reveal_in_explorer(output)
+        except Exception:
+            pass
+
         result = f"Created {format_name.upper()} file: {output} ({time.monotonic() - started_at:.1f}s)"
         if requested_code or (format_name in supported_code_extensions and format_name not in _TEXT_FORMATS):
             if any(term in req_low for term in ("vscode", "vs code", "vls code", "editor", "in code")):

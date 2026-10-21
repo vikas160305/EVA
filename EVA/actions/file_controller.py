@@ -1373,272 +1373,514 @@ def _run_soffice_convert(src: Path, outdir: Path, to_format: str) -> Path | None
 
 
 def _convert_docx_via_office(src: Path, out_path: Path) -> bool:
-    """Try converting DOCX to PDF using Windows Word COM automation (comtypes or win32com)."""
+    """Try converting DOCX to PDF using Windows Word COM automation."""
     if _OS != "Windows":
         return False
+    word = None
+    doc = None
+    com_initialized = False
     try:
         try:
-            import comtypes.client as cc
-            word = cc.CreateObject('Word.Application')
+            import pythoncom
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except Exception:
+            pass
+
+        try:
+            import win32com.client as wc
+            word = wc.Dispatch('Word.Application')
         except Exception:
             try:
-                import win32com.client as wc
-                word = wc.Dispatch('Word.Application')
+                import comtypes.client as cc
+                word = cc.CreateObject('Word.Application')
             except Exception:
                 return False
 
         word.Visible = False
-        doc = word.Documents.Open(str(src))
+        doc = word.Documents.Open(str(src.resolve()), ReadOnly=True, Visible=False)
         # 17 = wdFormatPDF
-        doc.SaveAs(str(out_path), FileFormat=17)
+        doc.SaveAs(str(out_path.resolve()), FileFormat=17)
         doc.Close(False)
-        try:
-            word.Quit()
-        except Exception:
-            pass
-        return out_path.exists()
+        doc = None
+        return out_path.exists() and out_path.stat().st_size > 0
     except Exception:
         return False
+    finally:
+        try:
+            if doc:
+                doc.Close(False)
+        except Exception:
+            pass
+        try:
+            if word:
+                word.Quit()
+        except Exception:
+            pass
+        doc = None
+        word = None
+        if com_initialized:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
 
 def _convert_pptx_via_office(src: Path, out_path: Path) -> bool:
-    """Try converting PPTX to PDF using Windows PowerPoint COM automation (comtypes or win32com)."""
+    """Try converting PPTX to PDF using Windows PowerPoint COM automation."""
     if _OS != "Windows":
         return False
+    ppt = None
+    pres = None
+    com_initialized = False
     try:
         try:
-            import comtypes.client as cc
-            ppt = cc.CreateObject('PowerPoint.Application')
+            import pythoncom
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except Exception:
+            pass
+
+        try:
+            import win32com.client as wc
+            ppt = wc.Dispatch('PowerPoint.Application')
         except Exception:
             try:
-                import win32com.client as wc
-                ppt = wc.Dispatch('PowerPoint.Application')
+                import comtypes.client as cc
+                ppt = cc.CreateObject('PowerPoint.Application')
             except Exception:
                 return False
 
-        ppt.Visible = False
-        pres = ppt.Presentations.Open(str(src), WithWindow=False)
+        # Note: Do not set ppt.Visible = False (PowerPoint disallows hiding window via COM).
+        # Open with WithWindow=False (ReadOnly=False, Untitled=False, WithWindow=False)
+        pres = ppt.Presentations.Open(str(src.resolve()), False, False, False)
         # 32 = ppSaveAsPDF
-        pres.SaveAs(str(out_path), FileFormat=32)
+        pres.SaveAs(str(out_path.resolve()), 32)
         pres.Close()
-        try:
-            ppt.Quit()
-        except Exception:
-            pass
-        return out_path.exists()
+        pres = None
+        return out_path.exists() and out_path.stat().st_size > 0
     except Exception:
         return False
+    finally:
+        try:
+            if pres:
+                pres.Close()
+        except Exception:
+            pass
+        try:
+            if ppt:
+                ppt.Quit()
+        except Exception:
+            pass
+        pres = None
+        ppt = None
+        if com_initialized:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+
+def _resolve_convert_source(path: str = "home", name: str = "") -> Path | None:
+    """Intelligently locate the source file for conversion from direct paths, relative filenames, or system searches."""
+    # 1. Direct absolute path check
+    if path:
+        p_obj = Path(str(path).strip())
+        if p_obj.is_absolute() and p_obj.exists() and p_obj.is_file():
+            return p_obj
+
+    # 2. Swap if path was passed as the filename
+    if not name and path:
+        path_str = str(path).strip()
+        p_obj = Path(path_str)
+        if p_obj.suffix or path_str.lower() not in {"desktop", "downloads", "documents", "pictures", "home", "all", "user", ""}:
+            name = path_str
+            path = "all"
+
+    name_clean = _clean_file_search_name(name)
+    name_lower = name_clean.lower()
+
+    # 3. Keyword matches: "latest", "recent", "the document", "the presentation", "the file"
+    if name_lower in {"latest", "recent", "last", "new", "the file", "the document", "the presentation", "the code", "current"}:
+        latest = _find_latest_file(name_lower)
+        if latest and latest.exists() and latest.is_file():
+            return latest
+
+    # 4. Check priority user folders (JARVIS Created, Desktop, Documents, Downloads, CWD)
+    quick_hit = _quick_find_file(name_clean, path_hint=str(path or ""))
+    if quick_hit and quick_hit.exists() and quick_hit.is_file():
+        return quick_hit
+
+    # 5. Direct safe path check
+    try:
+        candidate = resolve_safe_path(path if path not in {"all", ""} else "home", name_clean)
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    except Exception:
+        pass
+
+    # 6. Deep search across local drives
+    try:
+        find_files(
+            name=name_clean,
+            path=path if path in {"all", "home", "desktop", "downloads", "documents"} else "all",
+            max_results=5,
+            item_type="file",
+        )
+        with _SEARCH_SELECTION_LOCK:
+            selected_results = list(_LAST_SEARCH_RESULTS)
+        if selected_results:
+            for item in selected_results:
+                if item.exists() and item.is_file():
+                    return item
+    except Exception:
+        pass
+
+    return None
 
 
 def convert_file(path: str = "home", name: str = "", to: str = "pdf") -> str:
+    """Convert any document, presentation, image, data, or text file into a target format with high fidelity."""
     try:
-        base = _resolve_path(path)
-        src = (base / name) if name else base
+        src = _resolve_convert_source(path=path, name=name)
+        if not src or not src.exists():
+            return f"Source file not found: {name or path}. Please verify the file name or location."
+
         if not _is_safe_path(src):
             return f"Access denied: {src}"
-        if not src.exists():
-            return f"Source not found: {src.name}"
 
-        to = (to or "pdf").strip().lower()
-        if to.startswith("."):
-            to = to[1:]
-
-        out_dir = src.parent
-        out_name = src.stem + "." + to
-        out_path = out_dir / out_name
+        # Target format normalization & aliases
+        to = (to or "pdf").strip().lower().lstrip(".")
+        alias_map = {
+            "word": "docx", "doc": "docx",
+            "powerpoint": "pptx", "ppt": "pptx", "presentation": "pptx", "slides": "pptx",
+            "pdf": "pdf",
+            "text": "txt", "txt": "txt", "plain": "txt",
+            "markdown": "md", "md": "md",
+            "html": "html", "htm": "html",
+            "excel": "xlsx", "sheet": "xlsx", "spreadsheet": "xlsx",
+            "csv": "csv",
+            "json": "json",
+            "png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp", "bmp": "bmp", "tiff": "tiff"
+        }
+        to = alias_map.get(to, to)
 
         src_ext = src.suffix.lower()
+        if src_ext.lstrip(".") == to:
+            return f"File {src.name} is already in .{to} format: {src}"
 
-        # DOCX -> TXT
-        if src_ext == ".docx" and to == "txt":
-            try:
-                from docx import Document
-                doc = Document(str(src))
-                text = "\n".join(p.text for p in doc.paragraphs)
-                out_path.write_text(text, encoding="utf-8")
-                return f"Converted: {out_path}"
-            except Exception:
-                # Fallback: extract text from DOCX (zip) manually
+        out_dir = src.parent
+        out_name = f"{src.stem}.{to}"
+        out_path = out_dir / out_name
+        if out_path.exists():
+            for i in range(2, 500):
+                cand = out_dir / f"{src.stem}_{i}.{to}"
+                if not cand.exists():
+                    out_path = cand
+                    break
+
+        # 1. DOCX -> PDF
+        if src_ext in {".docx", ".doc"} and to == "pdf":
+            # Try Office COM (fastest, native fidelity)
+            if _convert_docx_via_office(src, out_path):
+                pass
+            else:
                 try:
-                    import zipfile, xml.etree.ElementTree as ET
-                    with zipfile.ZipFile(src, 'r') as z:
-                        data = z.read('word/document.xml')
-                    root = ET.fromstring(data)
-                    texts = [t.text for t in root.iter() if t.tag.endswith('}t') and (t.text)]
-                    out_path.write_text('\n'.join(texts), encoding='utf-8')
-                    return f"Converted (zip-fallback): {out_path}"
+                    import docx2pdf
+                    docx2pdf.convert(str(src), str(out_path))
                 except Exception:
-                    return "Could not extract DOCX text (install python-docx for robust support)."
+                    pass
+            if not out_path.exists() or out_path.stat().st_size == 0:
+                soffice_out = _run_soffice_convert(src, out_dir, "pdf")
+                if soffice_out and Path(soffice_out).exists():
+                    out_path = Path(soffice_out)
 
-        # DOCX -> PDF (try docx2pdf then libreoffice)
-        if src_ext == ".docx" and to == "pdf":
-            try:
-                import docx2pdf
-                docx2pdf.convert(str(src), str(out_path))
-                if out_path.exists():
-                    return f"Converted: {out_path}"
-            except Exception:
+            # Pure Python ReportLab fallback for DOCX -> PDF
+            if not out_path.exists() or out_path.stat().st_size == 0:
+                try:
+                    from docx import Document
+                    from reportlab.lib.pagesizes import letter
+                    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+                    doc = Document(str(src))
+                    styles = getSampleStyleSheet()
+                    story = []
+                    for p in doc.paragraphs:
+                        text = (p.text or "").strip()
+                        if text:
+                            story.append(Paragraph(text, styles["Normal"]))
+                            story.append(Spacer(1, 6))
+                    if story:
+                        SimpleDocTemplate(str(out_path), pagesize=letter).build(story)
+                except Exception:
+                    pass
+
+        # 2. PPTX -> PDF
+        elif src_ext in {".pptx", ".ppt"} and to == "pdf":
+            if _convert_pptx_via_office(src, out_path):
                 pass
-            # Try Windows Word COM automation (if running on Windows)
-            try:
-                if _convert_docx_via_office(src, out_path):
-                    return f"Converted: {out_path}"
-            except Exception:
-                pass
+            else:
+                soffice_out = _run_soffice_convert(src, out_dir, "pdf")
+                if soffice_out and Path(soffice_out).exists():
+                    out_path = Path(soffice_out)
 
-            soffice_out = _run_soffice_convert(src, out_dir, "pdf")
-            if soffice_out:
-                return f"Converted: {soffice_out}"
-            return "Could not convert DOCX→PDF: install docx2pdf or LibreOffice (soffice)"
+            # Pure Python ReportLab fallback for PPTX -> PDF
+            if not out_path.exists() or out_path.stat().st_size == 0:
+                try:
+                    from pptx import Presentation
+                    from reportlab.pdfgen import canvas
+                    from reportlab.lib.pagesizes import LETTER
+                    prs = Presentation(str(src))
+                    c = canvas.Canvas(str(out_path), pagesize=LETTER)
+                    for slide in prs.slides:
+                        y = LETTER[1] - 72
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text:
+                                for line in shape.text.split("\n"):
+                                    line_s = line.strip()
+                                    if not line_s:
+                                        continue
+                                    if y < 72:
+                                        c.showPage()
+                                        y = LETTER[1] - 72
+                                    c.drawString(72, y, line_s[:100])
+                                    y -= 14
+                        c.showPage()
+                    c.save()
+                except Exception:
+                    pass
 
-        # PDF -> TXT
-        if src_ext == ".pdf" and to == "txt":
+        # 3. PDF -> DOCX (Word)
+        elif src_ext == ".pdf" and to in {"docx", "doc"}:
             try:
                 from PyPDF2 import PdfReader
-            except Exception:
-                return "Missing dependency: PyPDF2 (pip install PyPDF2)"
-            reader = PdfReader(str(src))
-            pages = []
-            for p in reader.pages:
-                try:
-                    pages.append(p.extract_text() or "")
-                except Exception:
-                    pages.append("")
-            out_path.write_text("\n\n".join(pages), encoding="utf-8")
-            return f"Converted: {out_path}"
+                from docx import Document
+                from docx.shared import Pt
+                reader = PdfReader(str(src))
+                doc = Document()
+                h0 = doc.add_heading(src.stem, 0)
+                h0.paragraph_format.space_after = Pt(12)
+                for page_idx, page in enumerate(reader.pages, 1):
+                    p_text = (page.extract_text() or "").strip()
+                    if p_text:
+                        h = doc.add_heading(f"Page {page_idx}", level=2)
+                        h.paragraph_format.space_before = Pt(12)
+                        h.paragraph_format.space_after = Pt(4)
+                        for block in p_text.split("\n\n"):
+                            block_s = block.strip()
+                            if block_s:
+                                doc.add_paragraph(block_s)
+                doc.save(out_path)
+            except Exception as e:
+                return f"Could not convert PDF to DOCX: {e}"
 
-        # PPTX -> TXT
-        if src_ext in {".pptx", ".ppt"} and to == "txt":
+        # 4. PDF -> TXT
+        elif src_ext == ".pdf" and to == "txt":
+            try:
+                from PyPDF2 import PdfReader
+                reader = PdfReader(str(src))
+                pages = []
+                for idx, p in enumerate(reader.pages, 1):
+                    text = (p.extract_text() or "").strip()
+                    if text:
+                        pages.append(f"--- Page {idx} ---\n{text}")
+                out_path.write_text("\n\n".join(pages), encoding="utf-8")
+            except Exception as e:
+                return f"Could not extract PDF text: {e}"
+
+        # 5. PPTX -> DOCX (Word)
+        elif src_ext in {".pptx", ".ppt"} and to in {"docx", "doc"}:
+            try:
+                from pptx import Presentation
+                from docx import Document
+                prs = Presentation(str(src))
+                doc = Document()
+                doc.add_heading(src.stem, 0)
+                for idx, slide in enumerate(prs.slides, 1):
+                    title_text = f"Slide {idx}"
+                    bullets = []
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text.strip():
+                            lines = [l.strip() for l in shape.text.split("\n") if l.strip()]
+                            if lines:
+                                if title_text == f"Slide {idx}":
+                                    title_text = lines[0]
+                                    bullets.extend(lines[1:])
+                                else:
+                                    bullets.extend(lines)
+                    doc.add_heading(title_text, level=1)
+                    for b in bullets:
+                        doc.add_paragraph(b, style="List Bullet")
+                doc.save(out_path)
+            except Exception as e:
+                return f"Could not convert PPTX to DOCX: {e}"
+
+        # 6. PPTX -> TXT
+        elif src_ext in {".pptx", ".ppt"} and to == "txt":
             try:
                 from pptx import Presentation
                 prs = Presentation(str(src))
                 parts = []
-                for slide in prs.slides:
+                for idx, slide in enumerate(prs.slides, 1):
+                    slide_lines = [f"=== Slide {idx} ==="]
                     for shape in slide.shapes:
-                        if hasattr(shape, "text"):
-                            parts.append(shape.text)
+                        if hasattr(shape, "text") and shape.text.strip():
+                            slide_lines.append(shape.text.strip())
+                    parts.append("\n".join(slide_lines))
                 out_path.write_text("\n\n".join(parts), encoding="utf-8")
-                return f"Converted: {out_path}"
             except Exception:
-                # Fallback: read slide XML from PPTX zip and extract <a:t> text
                 try:
                     import zipfile, xml.etree.ElementTree as ET
                     texts = []
-                    with zipfile.ZipFile(src, 'r') as z:
+                    with zipfile.ZipFile(src, "r") as z:
                         for name in z.namelist():
-                            if name.startswith('ppt/slides/slide') and name.endswith('.xml'):
+                            if name.startswith("ppt/slides/slide") and name.endswith(".xml"):
                                 data = z.read(name)
                                 root = ET.fromstring(data)
                                 for t in root.iter():
-                                    if t.tag.endswith('}t') and t.text:
+                                    if t.tag.endswith("}t") and t.text:
                                         texts.append(t.text)
-                    out_path.write_text('\n\n'.join(texts), encoding='utf-8')
-                    return f"Converted (zip-fallback): {out_path}"
-                except Exception:
-                    return "Could not extract PPTX text (install python-pptx for robust support)."
+                    out_path.write_text("\n".join(texts), encoding="utf-8")
+                except Exception as e:
+                    return f"Could not extract PPTX text: {e}"
 
-        # PPTX -> PDF: try PowerPoint COM automation on Windows before soffice
-        if src_ext in {".pptx", ".ppt"} and to == "pdf":
+        # 7. DOCX -> TXT
+        elif src_ext in {".docx", ".doc"} and to == "txt":
             try:
-                if _convert_pptx_via_office(src, out_path):
-                    return f"Converted: {out_path}"
+                from docx import Document
+                doc = Document(str(src))
+                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                out_path.write_text(text, encoding="utf-8")
             except Exception:
-                pass
-            soffice_out = _run_soffice_convert(src, out_dir, "pdf")
-            if soffice_out:
-                return f"Converted: {soffice_out}"
-            # Fallback: extract slide text and render to PDF using reportlab
+                try:
+                    import zipfile, xml.etree.ElementTree as ET
+                    with zipfile.ZipFile(src, "r") as z:
+                        data = z.read("word/document.xml")
+                    root = ET.fromstring(data)
+                    texts = [t.text for t in root.iter() if t.tag.endswith("}t") and t.text]
+                    out_path.write_text("\n".join(texts), encoding="utf-8")
+                except Exception as e:
+                    return f"Could not extract DOCX text: {e}"
+
+        # 8. TXT / Markdown -> PDF
+        elif src_ext in {".txt", ".md", ".log"} and to == "pdf":
             try:
                 from reportlab.pdfgen import canvas
                 from reportlab.lib.pagesizes import LETTER
-                texts = []
-                try:
-                    from pptx import Presentation
-                    prs = Presentation(str(src))
-                    for slide in prs.slides:
-                        slide_text = []
-                        for shape in slide.shapes:
-                            if hasattr(shape, 'text') and shape.text:
-                                slide_text.append(shape.text)
-                        texts.append('\n'.join(slide_text))
-                except Exception:
-                    # zip fallback for pptx
-                    import zipfile, xml.etree.ElementTree as ET
-                    with zipfile.ZipFile(src, 'r') as z:
-                        slide_names = [n for n in z.namelist() if n.startswith('ppt/slides/slide') and n.endswith('.xml')]
-                        for name in slide_names:
-                            data = z.read(name)
-                            root = ET.fromstring(data)
-                            slide_text = [t.text for t in root.iter() if t.tag.endswith('}t') and t.text]
-                            texts.append('\n'.join(slide_text))
+                c = canvas.Canvas(str(out_path), pagesize=LETTER)
+                y = LETTER[1] - 72
+                with open(src, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.rstrip("\n")
+                        if y < 72:
+                            c.showPage()
+                            y = LETTER[1] - 72
+                        c.drawString(72, y, line[:110])
+                        y -= 13
+                c.save()
+            except Exception as e:
+                return f"Could not convert TXT to PDF: {e}"
 
-                if texts:
-                    c = canvas.Canvas(str(out_path), pagesize=LETTER)
-                    for slide_text in texts:
-                        y = LETTER[1] - 72
-                        for line in slide_text.split('\n'):
-                            if y < 72:
-                                c.showPage()
-                                y = LETTER[1] - 72
-                            c.drawString(72, y, line)
-                            y -= 12
-                        c.showPage()
-                    c.save()
-                    if out_path.exists():
-                        return f"Converted (text-render): {out_path}"
-            except Exception:
-                pass
+        # 9. TXT / Markdown -> DOCX
+        elif src_ext in {".txt", ".md"} and to in {"docx", "doc"}:
+            try:
+                from docx import Document
+                doc = Document()
+                doc.add_heading(src.stem, 0)
+                with open(src, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line_s = line.strip()
+                        if line_s.startswith("# "):
+                            doc.add_heading(line_s[2:], level=1)
+                        elif line_s.startswith("## "):
+                            doc.add_heading(line_s[3:], level=2)
+                        elif line_s.startswith("- ") or line_s.startswith("* "):
+                            doc.add_paragraph(line_s[2:], style="List Bullet")
+                        elif line_s:
+                            doc.add_paragraph(line_s)
+                doc.save(out_path)
+            except Exception as e:
+                return f"Could not convert text to DOCX: {e}"
 
-        # Generic: try LibreOffice for many conversions (doc, docx, odt, pptx -> pdf/txt)
-        soffice_map = {"pdf": "pdf", "txt": "txt"}
-        # Additional PDF conversions: TXT -> PDF, images -> PDF
-        if to == "pdf":
-            # TXT -> PDF via reportlab if available, otherwise use soffice
-            if src_ext == ".txt":
-                try:
-                    from reportlab.pdfgen import canvas
-                    from reportlab.lib.pagesizes import LETTER
-                    c = canvas.Canvas(str(out_path), pagesize=LETTER)
-                    y = LETTER[1] - 72
-                    with open(src, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            line = line.rstrip("\n")
-                            if y < 72:
-                                c.showPage()
-                                y = LETTER[1] - 72
-                            c.drawString(72, y, line)
-                            y -= 12
-                    c.save()
-                    if out_path.exists():
-                        return f"Converted: {out_path}"
-                except Exception:
-                    soffice_out = _run_soffice_convert(src, out_dir, "pdf")
-                    if soffice_out:
-                        return f"Converted: {soffice_out}"
-                    return "Could not convert TXT→PDF: install reportlab or LibreOffice (soffice)"
+        # 10. Images -> PDF
+        elif src_ext in _IMAGE_EXTS and to == "pdf":
+            try:
+                from PIL import Image
+                im = Image.open(str(src))
+                if im.mode in ("RGBA", "LA", "P"):
+                    im = im.convert("RGB")
+                im.save(str(out_path), "PDF", resolution=100.0)
+            except Exception as e:
+                return f"Could not convert image to PDF: {e}"
 
-            # Images -> PDF via Pillow if available
-            if src_ext in _IMAGE_EXTS:
-                try:
-                    from PIL import Image
-                    im = Image.open(str(src))
-                    if im.mode in ("RGBA", "LA"):
-                        im = im.convert("RGB")
-                    im.save(str(out_path), "PDF", resolution=100.0)
-                    if out_path.exists():
-                        return f"Converted: {out_path}"
-                except Exception:
-                    soffice_out = _run_soffice_convert(src, out_dir, "pdf")
-                    if soffice_out:
-                        return f"Converted: {soffice_out}"
-                    return "Could not convert image→PDF: install Pillow or LibreOffice (soffice)"
+        # 11. Image -> Image format
+        elif src_ext in _IMAGE_EXTS and to in {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "ico"}:
+            try:
+                from PIL import Image
+                im = Image.open(str(src))
+                pil_fmt = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP", "bmp": "BMP", "tiff": "TIFF", "ico": "ICO"}.get(to, to.upper())
+                if to in {"jpg", "jpeg", "bmp"} and im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
+                im.save(str(out_path), pil_fmt)
+            except Exception as e:
+                return f"Could not convert image format: {e}"
 
-        if to in soffice_map:
+        # 12. CSV <-> Excel (XLSX) <-> JSON
+        elif src_ext in {".csv", ".tsv"} and to in {"xlsx", "excel"}:
+            try:
+                import pandas as pd
+                df = pd.read_csv(src, encoding="utf-8", encoding_errors="replace")
+                df.to_excel(out_path, index=False)
+            except Exception as e:
+                return f"Could not convert CSV to Excel: {e}"
+
+        elif src_ext in {".xlsx", ".xls"} and to == "csv":
+            try:
+                import pandas as pd
+                df = pd.read_excel(src)
+                df.to_csv(out_path, index=False, encoding="utf-8")
+            except Exception as e:
+                return f"Could not convert Excel to CSV: {e}"
+
+        elif src_ext in {".csv", ".tsv", ".xlsx", ".xls"} and to == "json":
+            try:
+                import pandas as pd
+                df = pd.read_csv(src) if src_ext in {".csv", ".tsv"} else pd.read_excel(src)
+                df.to_json(out_path, orient="records", force_ascii=False, indent=2)
+            except Exception as e:
+                return f"Could not convert dataset to JSON: {e}"
+
+        elif src_ext == ".json" and to in {"csv", "xlsx"}:
+            try:
+                import pandas as pd
+                df = pd.read_json(src)
+                if to == "csv":
+                    df.to_csv(out_path, index=False, encoding="utf-8")
+                else:
+                    df.to_excel(out_path, index=False)
+            except Exception as e:
+                return f"Could not convert JSON: {e}"
+
+        # 13. Generic LibreOffice fallback
+        else:
             soffice_out = _run_soffice_convert(src, out_dir, to)
-            if soffice_out:
-                return f"Converted: {soffice_out}"
+            if soffice_out and Path(soffice_out).exists():
+                out_path = Path(soffice_out)
 
-        return f"Unsupported conversion: {src_ext} → .{to} or missing dependencies."
+        if not out_path.exists() or out_path.stat().st_size == 0:
+            return f"Conversion failed: could not convert {src.name} to .{to} format."
+
+        # Auto-reveal converted file in File Explorer
+        try:
+            from actions.media_downloader import _reveal_in_explorer
+            _reveal_in_explorer(out_path)
+        except Exception:
+            pass
+
+        size_str = _format_size(out_path.stat().st_size)
+        return f"Successfully converted {src.name} to {to.upper()}: {out_path} ({size_str})"
 
     except Exception as e:
         return f"Conversion error: {e}"
@@ -1829,7 +2071,8 @@ def file_controller(
             return get_file_info(path, name=name)
 
         elif action == "convert":
-            return convert_file(path=path, name=name, to=params.get("to", "pdf"))
+            target_to = params.get("to") or params.get("format") or params.get("target") or "pdf"
+            return convert_file(path=path, name=name, to=target_to)
 
         else:
             return f"Unknown action: '{action}'"

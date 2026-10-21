@@ -148,8 +148,11 @@ def _process_image(path: Path, action: str, params: dict, speak=None) -> str:
         except Exception as e:
             return f"Resize failed: {e}"
 
-    if action == "convert":
-        fmt = params.get("format", "png").lower().strip(".")
+    if action in ("convert", "to_pdf"):
+        fmt = "pdf" if action == "to_pdf" else params.get("format", "png").lower().strip(".")
+        if fmt == "pdf":
+            from actions.file_controller import convert_file
+            return convert_file(path=str(path.parent), name=path.name, to="pdf")
         fmt_map = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG",
                    "webp": "WEBP", "bmp": "BMP", "tiff": "TIFF"}
         pil_fmt = fmt_map.get(fmt, fmt.upper())
@@ -241,24 +244,12 @@ def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
         except Exception:
             return f"PDF size: {_file_size_str(path)}"
 
-    if action == "to_word":
-        text = _extract_pdf_text()
-        if not text:
-            return "Could not extract text to convert."
-        try:
-            from docx import Document
-            doc  = Document()
-            doc.add_heading(path.stem, 0)
-            for para in text.split("\n\n"):
-                if para.strip():
-                    doc.add_paragraph(para.strip())
-            out = _output_path(path, "converted", ".docx")
-            doc.save(out)
-            return f"Converted to Word document. Saved: {out.name}"
-        except ImportError:
-            return "python-docx not installed. Run: pip install python-docx"
+    if action in ("to_word", "to_docx", "to_txt", "convert"):
+        from actions.file_controller import convert_file
+        target_to = "docx" if action in ("to_word", "to_docx") else ("txt" if action == "to_txt" else params.get("format", "docx"))
+        return convert_file(path=str(path.parent), name=path.name, to=target_to)
 
-    return f"Unknown PDF action: '{action}'. Try: summarize, extract_text, info, to_word"
+    return f"Unknown PDF action: '{action}'. Try: summarize, extract_text, info, to_word, to_txt"
 
 def _process_text_doc(path: Path, file_type: str, action: str,
                        params: dict, speak=None) -> str:
@@ -280,6 +271,11 @@ def _process_text_doc(path: Path, file_type: str, action: str,
     content = _read_content()
     if not content.strip():
         return "File appears to be empty."
+
+    if action in ("to_pdf", "to_word", "to_docx", "to_txt", "convert"):
+        from actions.file_controller import convert_file
+        target_to = "pdf" if action == "to_pdf" else ("docx" if action in ("to_word", "to_docx") else ("txt" if action == "to_txt" else params.get("format", "pdf")))
+        return convert_file(path=str(path.parent), name=path.name, to=target_to)
 
     if action == "word_count":
         words = len(content.split())
@@ -755,6 +751,11 @@ def _process_archive(path: Path, action: str, params: dict, speak=None) -> str:
 
 def _process_pptx(path: Path, action: str, params: dict, speak=None) -> str:
     action = action or "summarize"
+
+    if action in ("to_pdf", "to_word", "to_docx", "to_txt", "convert"):
+        from actions.file_controller import convert_file
+        target_to = "pdf" if action == "to_pdf" else ("docx" if action in ("to_word", "to_docx") else ("txt" if action == "to_txt" else params.get("format", "pdf")))
+        return convert_file(path=str(path.parent), name=path.name, to=target_to)
 
     def _read_pptx_text() -> str:
         try:

@@ -410,23 +410,24 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "file_controller",
-        "description": "Manages files and folders: open, find, list, create, delete, move, copy, rename, read, write, disk usage. For EVERY request to OPEN a file or folder (e.g. 'open factorial.java', 'open freedom.docx', 'open my document', 'open file X'), use action='open' with name=<filename>. It automatically searches all drives and common user folders, and immediately opens and displays the file on the user's screen. If multiple matches exist, it shows numbered choices. For search-only requests ('where is file X', 'find file X'), use action='find'.",
+        "description": "Manages files and folders: open, find, list, create, delete, move, copy, rename, read, write, disk usage, and convert. For EVERY request to OPEN a file or folder (e.g. 'open factorial.java', 'open freedom.docx', 'open my document', 'open file X'), use action='open' with name=<filename>. It automatically searches all drives and common user folders, and immediately opens and displays the file on the user's screen. For requests to CONVERT a file (e.g. 'convert freedom.docx to PDF', 'convert my presentation to PDF', 'convert notes.pdf to word', 'convert image to PDF', 'convert data.csv to excel'), use action='convert' with name=<filename_or_path> and to=<target_format>. For search-only requests ('where is file X', 'find file X'), use action='find'.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | open | open_file | open_folder | largest | disk_usage | organize_desktop | info"},
+                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | open | open_file | open_folder | largest | disk_usage | organize_desktop | info | convert"},
                 "path":        {"type": "STRING", "description": "File/folder path, absolute path, or shortcut: desktop, downloads, documents, pictures, images, videos, music, home. Use 'all' to search every local drive plus common user folders; extra roots use MARK_L_SEARCH_PATHS"},
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
                 "content":     {"type": "STRING", "description": "Content for create_file/write"},
                 "overwrite":   {"type": "BOOLEAN", "description": "Allow create_file to replace an existing file"},
                 "confirmed":   {"type": "BOOLEAN", "description": "Required true value for delete; deletion only moves to Trash"},
-                "name":        {"type": "STRING", "description": "File name to search for"},
+                "name":        {"type": "STRING", "description": "File name to search for or convert"},
                 "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf, .jpg, image, video)"},
                 "max_results": {"type": "INTEGER", "description": "Maximum number of search results (default 20, max 50)"},
                 "open":        {"type": "BOOLEAN", "description": "For find action: open only when exactly one strong match exists; otherwise ask the user to choose"},
                 "item_type":   {"type": "STRING", "description": "Search filter: file, folder, or both (default both)"},
                 "count":       {"type": "INTEGER", "description": "Number of results for largest"},
+                "to":          {"type": "STRING", "description": "Target format for convert action, e.g. pdf, docx, txt, xlsx, png, jpg"},
             },
             "required": ["action"]
         }
@@ -584,7 +585,7 @@ TOOL_DECLARATIONS = [
     },
     {
     "name": "content_creator",
-    "description": "Creates a complete PPTX, Word/DOCX, PDF, TXT, Markdown, HTML, JSON, or source-code file from a natural-language request. Use it for content-rich documents, presentations, reports, and code; it can research current topics and add relevant presentation images. Never overwrites an existing file; it verifies that each output was written.",
+    "description": "Creates a complete PPTX, Word/DOCX, PDF, TXT, Markdown, HTML, JSON, or source-code file from a natural-language request. Produces beautifully formatted, authoritative documents and presentations with clean alignments, typography hierarchies, and margins. Can automatically research current topics and search, download, and embed relevant high-quality internet images into slides and documents. Never overwrites an existing file; it verifies that each output was written.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -594,7 +595,8 @@ TOOL_DECLARATIONS = [
             "count": {"type": "INTEGER", "description": "Requested presentation slide count; default 10."},
             "name": {"type": "STRING", "description": "Optional output filename without extension."},
             "destination": {"type": "STRING", "description": "Optional output folder."},
-            "research": {"type": "BOOLEAN", "description": "Use current web research; default true."}
+            "research": {"type": "BOOLEAN", "description": "Use current web research; default true."},
+            "images": {"type": "BOOLEAN", "description": "Set to true to search and download relevant internet images and embed them into the document or slides with executive layout and alignment; automatically enabled if request mentions images or pictures."}
         },
         "required": ["request", "format"]
     }
@@ -604,16 +606,16 @@ TOOL_DECLARATIONS = [
     "description": (
         "Processes any file that the user has uploaded or dropped onto the interface. "
         "Use this when the user refers to an uploaded file and wants an action on it. "
-        "Supports: images (describe/ocr/resize/compress/convert), "
-        "PDFs (summarize/extract_text/to_word), "
-        "Word docs & text files (summarize/fix/reformat/translate), "
+        "Supports: images (describe/ocr/resize/compress/convert/to_pdf), "
+        "PDFs (summarize/extract_text/to_word/to_txt/convert), "
+        "Word docs & text files (summarize/fix/reformat/to_pdf/to_word/translate), "
         "CSV/Excel (analyze/stats/filter/sort/convert), "
-        "JSON/XML (validate/format/analyze), "
+        "JSON/XML (validate/format/analyze/to_csv), "
         "code files (explain/review/fix/optimize/run/document/test), "
         "audio (transcribe/trim/convert/info), "
-        "video (trim/extract_audio/extract_frame/compress/transcribe/info), "
+        "video (trim/extract_audio/extract_frame/compress/transcribe/info/convert), "
         "archives (list/extract), "
-        "presentations (summarize/extract_text). "
+        "presentations (summarize/extract_text/to_pdf/to_word/convert). "
         "ALWAYS call this tool when a file has been uploaded and the user gives a command about it. "
         "If the user's command is ambiguous, pick the most logical action for that file type."
     ),
