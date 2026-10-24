@@ -96,6 +96,9 @@ _CRYPTOJS_CDN  = ("https://cdnjs.cloudflare.com/ajax/libs/"
 _CRYPTOJS_FILE = STATIC_DIR / "crypto-js.min.js"
 
 
+_firewall_attempted = False
+
+
 def _ensure_network_access(port: int) -> None:
     """Cross-platform, best-effort: open port in the OS firewall for LAN access.
 
@@ -106,6 +109,10 @@ def _ensure_network_access(port: int) -> None:
     macOS   : osascript admin dialog if the Application Firewall is on.
     Linux   : pkexec GUI → sudo -n → prints manual command as fallback.
     """
+    global _firewall_attempted
+    if _firewall_attempted:
+        return
+    _firewall_attempted = True
     import sys, subprocess, os, tempfile, threading
 
     # ── Windows ──────────────────────────────────────────────────────────────

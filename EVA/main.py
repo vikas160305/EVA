@@ -35,6 +35,32 @@ from datetime import datetime
 from pathlib import Path
 
 import sounddevice as sd
+
+# Patch websockets connection for Gemini Live WebSocket endpoint.
+# Google's Gemini Live server does not reply to client keepalive ping frames.
+# Default websockets ping_interval=20, ping_timeout=20 causes it to close healthy
+# connections every 20-40 seconds with:
+# "sent 1011 keepalive ping timeout; no close frame received" (1006 abnormal closure).
+# Disabling client-side ping timeouts keeps the Gemini Live WebSocket permanently connected.
+try:
+    import websockets.asyncio.client
+    _orig_ws_connect = websockets.asyncio.client.connect
+
+    def _patched_ws_connect(*args, **kwargs):
+        kwargs.setdefault("ping_interval", None)
+        kwargs.setdefault("ping_timeout", None)
+        kwargs.setdefault("close_timeout", 10)
+        return _orig_ws_connect(*args, **kwargs)
+
+    websockets.asyncio.client.connect = _patched_ws_connect
+    try:
+        import google.genai.live as _genai_live
+        _genai_live.ws_connect = _patched_ws_connect
+    except Exception:
+        pass
+except Exception:
+    pass
+
 from google import genai
 from google.genai import types
 from ui import JarvisUI
@@ -1281,6 +1307,8 @@ class JarvisLive:
                 print("[JARVIS] 🎤 Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             print(f"[JARVIS] ❌ Mic: {e}")
             raise
@@ -1290,150 +1318,151 @@ class JarvisLive:
         out_buf, in_buf = [], []
 
         try:
-            while True:
-                async for response in self.session.receive():
-                    self._mark_timeline("gemini_connect")
+            async for response in self.session.receive():
+                self._mark_timeline("gemini_connect")
 
-                    # The server periodically rotates this handle.  It is the
-                    # only value needed to resume after a 1006 / transient
-                    # WebSocket disconnect; without it, reconnection loses the
-                    # active Live session and can repeatedly start over.
-                    if response.session_resumption_update:
-                        update = response.session_resumption_update
-                        if update.resumable and update.new_handle:
-                            self._session_handle = update.new_handle
+                # The server periodically rotates this handle.  It is the
+                # only value needed to resume after a 1006 / transient
+                # WebSocket disconnect; without it, reconnection loses the
+                # active Live session and can repeatedly start over.
+                if response.session_resumption_update:
+                    update = response.session_resumption_update
+                    if update.resumable and update.new_handle:
+                        self._session_handle = update.new_handle
 
-                    if response.data:
-                        if self._cancel_event.is_set():
-                            continue
-                        if self._interrupted:
-                            pass  # discard: interrupted
-                        else:
-                            if self._turn_done_event and self._turn_done_event.is_set():
-                                self._turn_done_event.clear()
-                            # Split into ~10 ms chunks. That is fine-grained enough
-                            # to keep the first audible response immediate, while also
-                            # reducing the coarse-grain 20 ms burst pattern that can
-                            # make the voice sound clipped or too hurried when Gemini
-                            # sends a dense audio packet.
-                            _audio_data = response.data
-                            _SLICE = 960  # 24000 Hz × 2 bytes/sample × 0.02 s (20 ms / 480 samples)
-                            for _i in range(0, len(_audio_data), _SLICE):
-                                if self._cancel_event.is_set():
-                                    break
-                                audio_chunk = _audio_data[_i : _i + _SLICE]
-                                if not audio_chunk:
-                                    continue
-                                self._queue_outgoing_audio(audio_chunk)
-
-                            if not self._first_audio_logged and self._first_mic_at is not None:
-                                self._first_audio_logged = True
-                                self._mark_timeline("first_audio")
-                                print(
-                                    f"[Timing] mic capture -> first Gemini audio: "
-                                    f"{(time.monotonic() - self._first_mic_at) * 1000:.1f} ms"
-                                )
-
-                    if response.server_content:
-                        sc = response.server_content
-
-                        if sc.output_transcription and sc.output_transcription.text:
-                            txt = _clean_transcript(sc.output_transcription.text)
-                            if txt and txt != (out_buf[-1] if out_buf else ""):
-                                out_buf.append(txt)
-                                self._mark_timeline("first_text")
-
-                        if sc.input_transcription and sc.input_transcription.text:
-                            txt = _clean_transcript(sc.input_transcription.text)
-                            if txt:
-                                in_buf.append(txt)
-                                self._last_user_speech = time.monotonic()
-                                self._mark_timeline("speech_end")
-
-                        if sc.turn_complete:
-                            if self._turn_done_event:
-                                self._turn_done_event.set()
-
-                            # If this turn_complete ends an interrupted response, clear the
-                            # flag and skip all further processing for that turn.
-                            if self._interrupted:
-                                self._interrupted = False
-                                in_buf  = []
-                                out_buf = []
-                                continue
-
-                            full_in = " ".join(in_buf).strip()
-                            if full_in:
-                                self.ui.write_log(f"You: {full_in}")
-                                self._session_log.append(f"User: {full_in}")
-                                if self._dashboard:
-                                    asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "user",
-                                        "text": full_in,
-                                        "ts": datetime.now().isoformat(),
-                                    }))
-                            in_buf = []
-                            self._first_mic_at = None
-                            self._first_audio_logged = False
-
-                            full_out = " ".join(out_buf).strip()
-                            if full_out:
-                                self.ui.write_log(f"{self._asst_name}: {full_out}")
-                                self._session_log.append(f"{self._asst_name}: {full_out}")
-                                if self._dashboard:
-                                    asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "jarvis",
-                                        "text": full_out,
-                                        "ts": datetime.now().isoformat(),
-                                    }))
-                            out_buf = []
-
-                            # Vision injection: model finished tool-response turn → now send the image
-                            if self._pending_vision and self.session:
-                                import base64 as _b64
-                                img_b, mime_t, question, angle = self._pending_vision
-                                self._pending_vision = None
-                                b64 = _b64.b64encode(img_b).decode("ascii")
-                                print(f"[Vision] 📤 {len(img_b):,} bytes (angle={angle}) → main session")
-                                await self.session.send_client_content(
-                                    turns={"parts": [
-                                        {"inline_data": {"mime_type": mime_t, "data": b64}},
-                                        {"text": question},
-                                    ]},
-                                    turn_complete=True,
-                                )
-                                # Mark next turn_complete behaviour depending on angle
-                                if self._vision_cam_active:
-                                    # Camera: keep busy until JARVIS finishes speaking the answer
-                                    self._vision_cam_active    = False
-                                    self._vision_close_pending = True
-                                else:
-                                    # Screen-only: no camera to close; release busy flag now
-                                    self._vision_busy = False
-                            elif self._vision_close_pending:
-                                # This turn_complete IS the vision answer — close camera + release busy flag
-                                self._vision_close_pending = False
-                                self._vision_busy = False
-                                async def _cam_close():
-                                    await asyncio.sleep(2.0)
-                                    self.ui.stop_camera_stream()
-                                asyncio.create_task(_cam_close())
-
-                    if response.tool_call:
-                        self._mark_timeline("request_dispatch")
-                        if self._cancel_event.is_set():
-                            continue
-                        fn_responses = []
-                        for fc in response.tool_call.function_calls:
+                if response.data:
+                    if self._cancel_event.is_set():
+                        continue
+                    if self._interrupted:
+                        pass  # discard: interrupted
+                    else:
+                        if self._turn_done_event and self._turn_done_event.is_set():
+                            self._turn_done_event.clear()
+                        # Split into ~10 ms chunks. That is fine-grained enough
+                        # to keep the first audible response immediate, while also
+                        # reducing the coarse-grain 20 ms burst pattern that can
+                        # make the voice sound clipped or too hurried when Gemini
+                        # sends a dense audio packet.
+                        _audio_data = response.data
+                        _SLICE = 960  # 24000 Hz × 2 bytes/sample × 0.02 s (20 ms / 480 samples)
+                        for _i in range(0, len(_audio_data), _SLICE):
                             if self._cancel_event.is_set():
                                 break
-                            print(f"[JARVIS] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
-                            fn_responses.append(fr)
-                        if not self._cancel_event.is_set():
-                            await self.session.send_tool_response(
-                                function_responses=fn_responses
+                            audio_chunk = _audio_data[_i : _i + _SLICE]
+                            if not audio_chunk:
+                                continue
+                            self._queue_outgoing_audio(audio_chunk)
+
+                        if not self._first_audio_logged and self._first_mic_at is not None:
+                            self._first_audio_logged = True
+                            self._mark_timeline("first_audio")
+                            print(
+                                f"[Timing] mic capture -> first Gemini audio: "
+                                f"{(time.monotonic() - self._first_mic_at) * 1000:.1f} ms"
                             )
+
+                if response.server_content:
+                    sc = response.server_content
+
+                    if sc.output_transcription and sc.output_transcription.text:
+                        txt = _clean_transcript(sc.output_transcription.text)
+                        if txt and txt != (out_buf[-1] if out_buf else ""):
+                            out_buf.append(txt)
+                            self._mark_timeline("first_text")
+
+                    if sc.input_transcription and sc.input_transcription.text:
+                        txt = _clean_transcript(sc.input_transcription.text)
+                        if txt:
+                            in_buf.append(txt)
+                            self._last_user_speech = time.monotonic()
+                            self._mark_timeline("speech_end")
+
+                    if sc.turn_complete:
+                        if self._turn_done_event:
+                            self._turn_done_event.set()
+
+                        # If this turn_complete ends an interrupted response, clear the
+                        # flag and skip all further processing for that turn.
+                        if self._interrupted:
+                            self._interrupted = False
+                            in_buf  = []
+                            out_buf = []
+                            continue
+
+                        full_in = " ".join(in_buf).strip()
+                        if full_in:
+                            self.ui.write_log(f"You: {full_in}")
+                            self._session_log.append(f"User: {full_in}")
+                            if self._dashboard:
+                                asyncio.create_task(self._dashboard.broadcast({
+                                    "type": "log", "speaker": "user",
+                                    "text": full_in,
+                                    "ts": datetime.now().isoformat(),
+                                }))
+                        in_buf = []
+                        self._first_mic_at = None
+                        self._first_audio_logged = False
+
+                        full_out = " ".join(out_buf).strip()
+                        if full_out:
+                            self.ui.write_log(f"{self._asst_name}: {full_out}")
+                            self._session_log.append(f"{self._asst_name}: {full_out}")
+                            if self._dashboard:
+                                asyncio.create_task(self._dashboard.broadcast({
+                                    "type": "log", "speaker": "jarvis",
+                                    "text": full_out,
+                                    "ts": datetime.now().isoformat(),
+                                }))
+                        out_buf = []
+
+                        # Vision injection: model finished tool-response turn → now send the image
+                        if self._pending_vision and self.session:
+                            import base64 as _b64
+                            img_b, mime_t, question, angle = self._pending_vision
+                            self._pending_vision = None
+                            b64 = _b64.b64encode(img_b).decode("ascii")
+                            print(f"[Vision] 📤 {len(img_b):,} bytes (angle={angle}) → main session")
+                            await self.session.send_client_content(
+                                turns={"parts": [
+                                    {"inline_data": {"mime_type": mime_t, "data": b64}},
+                                    {"text": question},
+                                ]},
+                                turn_complete=True,
+                            )
+                            # Mark next turn_complete behaviour depending on angle
+                            if self._vision_cam_active:
+                                # Camera: keep busy until JARVIS finishes speaking the answer
+                                self._vision_cam_active    = False
+                                self._vision_close_pending = True
+                            else:
+                                # Screen-only: no camera to close; release busy flag now
+                                self._vision_busy = False
+                        elif self._vision_close_pending:
+                            # This turn_complete IS the vision answer — close camera + release busy flag
+                            self._vision_close_pending = False
+                            self._vision_busy = False
+                            async def _cam_close():
+                                await asyncio.sleep(2.0)
+                                self.ui.stop_camera_stream()
+                            asyncio.create_task(_cam_close())
+
+                if response.tool_call:
+                    self._mark_timeline("request_dispatch")
+                    if self._cancel_event.is_set():
+                        continue
+                    fn_responses = []
+                    for fc in response.tool_call.function_calls:
+                        if self._cancel_event.is_set():
+                            break
+                        print(f"[JARVIS] 📞 {fc.name}")
+                        fr = await self._execute_tool(fc)
+                        fn_responses.append(fr)
+                    if not self._cancel_event.is_set():
+                        await self.session.send_tool_response(
+                            function_responses=fn_responses
+                        )
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             print(f"[JARVIS] ❌ Recv: {e}")
             traceback.print_exc()
@@ -1494,13 +1523,35 @@ class JarvisLive:
                     await asyncio.to_thread(stream.write, bytes(batch))
                 except (RuntimeError, asyncio.CancelledError):
                     break   # executor shutting down — exit cleanly
+                except Exception as write_err:
+                    print(f"[JARVIS] ⚠️ Audio stream write hiccup: {write_err}")
+                    try:
+                        stream.stop()
+                        stream.close()
+                    except Exception:
+                        pass
+                    try:
+                        stream = sd.RawOutputStream(
+                            samplerate=RECEIVE_SAMPLE_RATE,
+                            channels=CHANNELS,
+                            dtype="int16",
+                            blocksize=0,
+                        )
+                        stream.start()
+                    except Exception:
+                        break
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             print(f"[JARVIS] ❌ Play: {e}")
             raise
         finally:
             self.set_speaking(False)
-            stream.stop()
-            stream.close()
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
@@ -1973,6 +2024,12 @@ class JarvisLive:
                     self._retry_delay = 3
             finally:
                 self.session = None
+                # If connection dropped before sustaining (e.g. within 30s), invalidate session resumption
+                # handle so the next attempt initiates a clean new session rather than retrying a dead/rejected handle.
+                if self._connected_at is None or (time.monotonic() - self._connected_at < 30):
+                    if self._session_handle:
+                        print("[JARVIS] Session resumption handle invalidated after early drop.")
+                        self._session_handle = None
                 if (
                     self._connected_at is not None
                     and time.monotonic() - self._connected_at >= 30
