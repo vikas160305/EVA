@@ -17,10 +17,11 @@ from actions.file_controller import DocumentService
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = Path.home() / "Documents" / "JARVIS Created"
 CONTENT_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
     "gemini-flash-latest",
     "gemini-3.8-flash",
     "gemini-flash-lite-latest",
-    "gemini-3.5-flash",
     "gemini-3.6-flash",
 ]
 CONTENT_MODEL = CONTENT_MODELS[0]
@@ -309,6 +310,13 @@ def _create_docx(plan: dict, output: Path, include_images: bool = False) -> None
         s.bottom_margin = Inches(1.0)
         s.left_margin = Inches(1.0)
         s.right_margin = Inches(1.0)
+        footer = s.footer
+        p_ft = footer.paragraphs[0]
+        p_ft.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        r_ft = p_ft.add_run(f"EVA AI  |  Executive Document  |  {time.strftime('%B %Y')}")
+        r_ft.font.name = "Calibri"
+        r_ft.font.size = Pt(9)
+        r_ft.font.color.rgb = RGBColor(148, 163, 184)
 
     style = doc.styles["Normal"]
     style.font.name = "Calibri"
@@ -515,7 +523,45 @@ def _create_pdf(plan: dict, output: Path, include_images: bool = False) -> None:
             items = [ListItem(Paragraph(str(s), bullet_style), leftIndent=15) for s in plan["sources"]]
             story.append(ListFlowable(items, bulletType="bullet", leftIndent=10))
 
-    SimpleDocTemplate(str(output), pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54).build(story)
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    class NumberedCanvas(rl_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            num_pages = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self.draw_page_decorations(num_pages)
+                super().showPage()
+            super().save()
+
+        def draw_page_decorations(self, page_count):
+            self.saveState()
+            self.setFont("Helvetica", 9)
+            self.setFillColor(colors.HexColor("#94A3B8"))
+            if self._pageNumber > 1:
+                self.setStrokeColor(colors.HexColor("#E2E8F0"))
+                self.setLineWidth(0.5)
+                self.line(54, 11 * 72 - 36, 8.5 * 72 - 54, 11 * 72 - 36)
+                self.drawString(54, 11 * 72 - 30, "EVA AI — Executive Document")
+
+            self.setStrokeColor(colors.HexColor("#E2E8F0"))
+            self.setLineWidth(0.5)
+            self.line(54, 45, 8.5 * 72 - 54, 45)
+            self.drawString(54, 32, "Prepared by EVA AI")
+            page_str = f"Page {self._pageNumber} of {page_count}"
+            self.drawRightString(8.5 * 72 - 54, 32, page_str)
+            self.restoreState()
+
+    doc = SimpleDocTemplate(str(output), pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
+    doc.build(story, canvasmaker=NumberedCanvas)
 
 
 def _create_pptx(plan: dict, output: Path, total_slides: int, include_images: bool = False) -> None:

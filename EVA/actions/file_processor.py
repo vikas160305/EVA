@@ -38,7 +38,7 @@ def _gemini_client():
     class _W:
         def generate_content(self, contents):
             last_err = None
-            for model_name in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.5-flash"]:
+            for model_name in ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]:
                 try:
                     return _c.models.generate_content(model=model_name, contents=contents)
                 except Exception as e:

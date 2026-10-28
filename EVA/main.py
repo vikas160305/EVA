@@ -990,12 +990,12 @@ class JarvisLive:
         # Identity injection — overrides any hardcoded name in prompt.txt
         _addr = (f"ADDRESS: Always call the user '{_user_name}'."
                  if _user_name
-                 else "ADDRESS: When speaking Turkish → always say \"efendim\". "
-                      "When speaking English → say \"sir\". Never mix languages.")
+                 else "ADDRESS: English is strictly your first preference. Always address the user as 'sir'. Only switch languages if the user explicitly asks you to.")
         identity_ctx = (
             f"[IDENTITY]\n"
             f"Your name is {self._asst_name}. "
             f"Always refer to yourself as {self._asst_name}.\n"
+            f"Default and primary language: English. Only change language if explicitly requested.\n"
             f"{_addr}\n\n"
         )
 
@@ -1480,13 +1480,13 @@ class JarvisLive:
 
                     if response.tool_call:
                         self._mark_timeline("request_dispatch")
-                        fn_responses = []
-                        for fc in response.tool_call.function_calls:
+                        fcs = response.tool_call.function_calls
+                        for fc in fcs:
                             print(f"[JARVIS] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
-                            fn_responses.append(fr)
+                        # Execute multiple tool calls simultaneously
+                        fn_responses = await asyncio.gather(*[self._execute_tool(fc) for fc in fcs])
                         await self.session.send_tool_response(
-                            function_responses=fn_responses
+                            function_responses=list(fn_responses)
                         )
         except asyncio.CancelledError:
             pass
@@ -1611,7 +1611,7 @@ class JarvisLive:
             return
 
         # ── Phase 1: instant greeting ─────────────────────────────────────────
-        lang_clause = f" Respond in {lang}." if lang else ""
+        lang_clause = f" Respond in {lang}." if (lang and lang.lower() != "english") else " Respond in English."
         name_clause = f" Address the user as {name}." if name else ""
 
         # Inject last session context if available — pop removes it so it's never repeated
@@ -1645,7 +1645,7 @@ class JarvisLive:
         # ── Phase 2: fire as soon as Phase 1 audio is done ───────────────────
         async def _deliver_news():
             try:
-                lang_str = f" Respond in {lang}." if lang else ""
+                lang_str = f" Respond in {lang}." if (lang and lang.lower() != "english") else " Respond in English."
 
                 # Wait for news fetch (already running) and Phase 1 turn-complete
                 # in parallel — whichever takes longer determines the wait time
