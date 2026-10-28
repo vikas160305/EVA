@@ -23,5 +23,11 @@
       "last_hash": "0a6794eab99e"
     }
   },
-  "sessions": []
+  "sessions": [
+    {
+      "date": "2026-10-28",
+      "summary": "The user noted that there were twenty minutes left until two o'clock and exchanged greetings with the assistant.",
+      "language": "English"
+    }
+  ]
 }

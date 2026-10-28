@@ -50,6 +50,7 @@ try:
         kwargs.setdefault("ping_interval", None)
         kwargs.setdefault("ping_timeout", None)
         kwargs.setdefault("close_timeout", 10)
+        kwargs.setdefault("open_timeout", 25)
         return _orig_ws_connect(*args, **kwargs)
 
     websockets.asyncio.client.connect = _patched_ws_connect
@@ -135,10 +136,10 @@ PLAYBACK_QUEUE_SIZE = 500
 BARGE_IN_RMS        = 4800 # High threshold so speaker audio echoing into mic does not falsely self-interrupt
 BARGE_IN_CHUNKS     = 8    # 160 ms confirmation avoids reacting to speaker echo or transient noise
 
-# Fast conversational turn detection.  A half-second pause still permits
-# natural speech, but removes the long default "is the user finished?" wait.
-VAD_PREFIX_PADDING_MS = 80
-VAD_SILENCE_MS        = 450
+# Ultra-fast conversational turn detection.
+# 240 ms silence detects turn completion ~210 ms faster while remaining natural.
+VAD_PREFIX_PADDING_MS = 40
+VAD_SILENCE_MS        = 240
 
 def _get_api_key() -> str:
     try:
@@ -1012,6 +1013,7 @@ class JarvisLive:
             response_modalities=["AUDIO"],
             output_audio_transcription={},
             input_audio_transcription={},
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     prefix_padding_ms=VAD_PREFIX_PADDING_MS,
@@ -1531,16 +1533,16 @@ class JarvisLive:
                 # Keep only a tiny output buffer.  Large batches make a quick
                 # response sound delayed and make interruption feel sluggish.
                 batch = bytearray(chunk)
-                # When starting from silence, pre-buffer ~100 ms of audio (4800 bytes)
-                # to absorb network packet arrival jitter and stop voice from breaking.
+                # Low-latency startup buffer: pre-buffer only ~30 ms (1440 bytes)
+                # so speech starts almost immediately without audible break-up.
                 if not was_speaking:
-                    prebuffer_deadline = time.monotonic() + 0.10
-                    while len(batch) < 4800 and time.monotonic() < prebuffer_deadline:
+                    prebuffer_deadline = time.monotonic() + 0.03
+                    while len(batch) < 1440 and time.monotonic() < prebuffer_deadline:
                         try:
                             batch.extend(self.audio_in_queue.get_nowait())
                         except asyncio.QueueEmpty:
-                            await asyncio.sleep(0.01)
-                while len(batch) < 3840:   # Batch up to 80 ms at 24 kHz / 16-bit mono
+                            await asyncio.sleep(0.005)
+                while len(batch) < 2880:   # Batch up to 60 ms for smooth playback
                     try:
                         batch.extend(self.audio_in_queue.get_nowait())
                     except asyncio.QueueEmpty:
