@@ -42,3 +42,12 @@ htmlcov/
 # Local certificate and runtime material never committed
 certs/
 config/certs/
+
+# Generated video media caches
+demo_video_gen/clips/
+demo_video_gen/real_clips/
+demo_video_gen/audio/
+demo_video_gen/__pycache__/
+demo_video_gen/*.png
+demo_video_gen/*.jpg
+demo_video_gen/concat_list.txt
